@@ -1,0 +1,4 @@
+Flask==2.3.3
+gunicorn==21.2.0
+google-generativeai==0.3.2  # Usando uma versão estável e conhecida
+python-dotenv==1.0.0
