@@ -1,0 +1,4 @@
+Flask==2.3.3
+gunicorn==21.2.0
+google-generativeai==0.8.2  # Use a versão mais recente
+python-dotenv==1.0.0
