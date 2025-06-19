@@ -15,7 +15,6 @@ app.post("/generate-audio", async (req, res) => {
       return res.status(400).json({ error: "Dados incompletos." });
     }
 
-    // Chamada para Gemini TTS (formato atualizado)
     const geminiResponse = await fetch(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro-preview-tts:generateContent?key=" + GEMINI_API_KEY,
       {
@@ -30,23 +29,15 @@ app.post("/generate-audio", async (req, res) => {
               ]
             }
           ],
-          tools: [
-            {
-              tool: "speech_synthesis",
-              tool_config: {
-                voice: { name: voice },
-                audio_encoding: "LINEAR16"
-              }
-            }
-          ],
-          generationConfig: { temperature: 1 }
+          generationConfig: { temperature: 1 },
+          voice: { name: voice },
+          audioConfig: { audioEncoding: "LINEAR16" }
         }),
       }
     );
 
     const data = await geminiResponse.json();
 
-    // Procura o audio gerado:
     const part = data.candidates?.[0]?.content?.parts?.[0];
     if (!part?.inlineData?.data) {
       console.error("Erro Gemini:", JSON.stringify(data));
