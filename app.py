@@ -48,7 +48,6 @@ def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
 
 @app.route('/')
 def home():
-    """Esta rota não é usada quando o frontend está na Hostinger, mas é bom mantê-la."""
     return "Backend do Gerador de Narração está online."
 
 @app.route('/generate-audio', methods=['POST'])
@@ -60,8 +59,7 @@ def generate_audio_endpoint():
 
     data = request.get_json()
     text_to_narrate = data.get('text')
-    voice_name = data.get('voice', 'Aoede')
-    # Pega as instruções de estilo da requisição. Retorna None se não for enviado.
+    voice_name = data.get('voice')
     style_instructions_text = data.get('style')
 
     if not text_to_narrate:
@@ -69,28 +67,24 @@ def generate_audio_endpoint():
 
     try:
         client = genai.Client(api_key=api_key)
-        model = "gemini-2.5-flash-preview-tts"
-        contents = [types.Content(role="user", parts=[types.Part.from_text(text=text_to_narrate)])]
+        
+        # Usando o identificador correto para o modelo Pro
+        model = "gemini-2.5-pro-preview-tts"
 
-        # --- LÓGICA ATUALIZADA PARA O SPEECH CONFIG ---
-        # Cria um dicionário com os parâmetros básicos de configuração da fala
-        speech_config_params = {
-            "voice_config": types.VoiceConfig(
-                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
-            )
-        }
-
-        # Se o texto de instrução de estilo existir (não for nulo ou vazio),
-        # adiciona-o ao dicionário de parâmetros.
+        parts_list = []
         if style_instructions_text:
-            speech_config_params["style_instructions"] = style_instructions_text
-
-        # Cria o objeto SpeechConfig usando os parâmetros preparados
-        speech_config = types.SpeechConfig(**speech_config_params)
+            parts_list.append(types.Part.from_text(text=style_instructions_text))
+        parts_list.append(types.Part.from_text(text=text_to_narrate))
+        
+        contents = [types.Content(role="user", parts=parts_list)]
         
         generate_content_config = types.GenerateContentConfig(
             response_modalities=["audio"],
-            speech_config=speech_config, # Usa o objeto de configuração que acabamos de criar
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
+                )
+            ),
         )
         
         audio_buffer = bytearray()

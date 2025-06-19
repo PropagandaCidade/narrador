@@ -5,129 +5,61 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gerador de Narração Virtual</title>
     <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background-color: #f4f7f9;
-            color: #333;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            margin: 0;
-            padding: 20px;
-            box-sizing: border-box;
-        }
-        .container {
-            background-color: #ffffff;
-            padding: 40px;
-            border-radius: 12px;
-            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.1);
-            width: 100%;
-            max-width: 600px;
-            text-align: center;
-        }
-        h1 {
-            color: #2c3e50;
-            margin-bottom: 20px;
-        }
-        p {
-            color: #7f8c8d;
-            margin-bottom: 30px;
-        }
-        label {
-            display: block;
-            text-align: left;
-            font-weight: bold;
-            color: #555;
-            margin-bottom: 8px;
-        }
-        textarea {
-            width: 100%;
-            padding: 15px;
-            border-radius: 8px;
-            border: 1px solid #dfe4ea;
-            font-size: 16px;
-            line-height: 1.5;
-            resize: vertical;
-            margin-bottom: 20px;
-            box-sizing: border-box;
-        }
-        #text-input { height: 150px; }
-        #style-input { height: 80px; } /* Altura menor para o campo de estilo */
-
-        .controls {
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            align-items: center;
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-        select {
-            padding: 12px;
-            border-radius: 8px;
-            border: 1px solid #dfe4ea;
-            font-size: 16px;
-            flex-grow: 1;
-            background-color: #fff;
-            cursor: pointer;
-        }
-        button {
-            background-color: #3498db;
-            color: white;
-            border: none;
-            padding: 15px 30px;
-            border-radius: 8px;
-            font-size: 16px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: background-color 0.3s ease, transform 0.1s ease;
-        }
-        button:hover {
-            background-color: #2980b9;
-        }
-        button:active {
-            transform: scale(0.98);
-        }
-        button:disabled {
-            background-color: #bdc3c7;
-            cursor: not-allowed;
-        }
-        .status {
-            margin-top: 20px;
-            font-weight: 500;
-            min-height: 24px;
-            transition: color 0.3s ease;
-        }
-        audio {
-            width: 100%;
-            margin-top: 20px;
-            display: none;
-        }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f4f7f9; color: #333; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+        .container { background-color: #ffffff; padding: 40px; border-radius: 12px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.1); width: 100%; max-width: 800px; }
+        h1 { color: #2c3e50; text-align: center; margin-bottom: 20px; }
+        label { display: block; text-align: left; font-weight: bold; color: #555; margin-bottom: 8px; margin-top: 20px; }
+        textarea { width: 100%; height: 120px; padding: 15px; border-radius: 8px; border: 1px solid #dfe4ea; font-size: 16px; resize: vertical; box-sizing: border-box; }
+        .select-group { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+        select { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #dfe4ea; font-size: 16px; background-color: #fff; cursor: pointer; }
+        .voice-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 15px; margin-top: 10px; max-height: 400px; overflow-y: auto; padding: 10px; border: 1px solid #dfe4ea; border-radius: 8px;}
+        .voice-card { border: 3px solid #dfe4ea; border-radius: 12px; padding: 10px; text-align: center; cursor: pointer; transition: all 0.2s ease-in-out; }
+        .voice-card:hover { border-color: #a5b1c2; transform: translateY(-3px); }
+        .voice-card.selected { border-color: #3498db; background-color: #ecf5fd; transform: translateY(-3px); box-shadow: 0 4px 10px rgba(52, 152, 219, 0.2); }
+        .voice-card img { width: 60px; height: 60px; border-radius: 50%; object-fit: cover; margin-bottom: 8px; border: 2px solid #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .voice-card .voice-name { font-weight: 600; color: #2c3e50; font-size: 13px; }
+        .button-container { text-align: center; margin-top: 30px; }
+        button { background-color: #3498db; color: white; border: none; padding: 15px 40px; border-radius: 8px; font-size: 18px; font-weight: bold; cursor: pointer; transition: background-color 0.3s ease, transform 0.1s ease; }
+        button:disabled { background-color: #bdc3c7; cursor: not-allowed; }
+        .status { text-align: center; margin-top: 20px; font-weight: 500; min-height: 24px; }
+        audio { width: 100%; margin-top: 20px; display: none; }
     </style>
 </head>
 <body>
 
     <div class="container">
-        <h1>Gerador de Narração Virtual</h1>
-        <p>Digite o texto, adicione instruções de estilo (em inglês) e clique em gerar.</p>
+        <h1>Estúdio de Narração Virtual</h1>
 
-        <label for="text-input">Texto para Narração</label>
-        <textarea id="text-input" placeholder="Digite seu texto aqui..."></textarea>
+        <label for="text-input">1. Digite o Texto a ser Narrado</label>
+        <textarea id="text-input" placeholder="Ex: A oferta que você esperava chegou!"></textarea>
+
+        <div class="select-group">
+            <div>
+                <label for="format-select">2. Escolha o Formato</label>
+                <select id="format-select">
+                    <option value="spot_comercial">Spot Comercial</option>
+                    <option value="carro_de_som">Carro de Som</option>
+                    <option value="vinheta">Vinheta</option>
+                    <option value="vsl">VSL (Vídeo de Vendas)</option>
+                    <option value="audio_institucional">Áudio Institucional</option>
+                </select>
+            </div>
+            <div>
+                <label for="style-select">3. Escolha o Estilo</label>
+                <select id="style-select">
+                    <option value="padrao">Padrão</option>
+                    <option value="impacto">Impacto</option>
+                    <option value="animada">Animada</option>
+                </select>
+            </div>
+        </div>
         
-        <!-- NOVO CAMPO PARA INSTRUÇÕES DE ESTILO -->
-        <label for="style-input">Instruções de Estilo (em Inglês)</label>
-        <textarea id="style-input" placeholder="Ex: Read aloud in a warm and friendly tone. Emphasize the last sentence."></textarea>
-        
-        <div class="controls">
-             <select id="voice-select">
-                <option value="Aoede">Voz Feminina 1 (Padrão)</option>
-                <option value="Calypso">Voz Feminina 2</option>
-                <option value="Euterpe">Voz Feminina 3</option>
-                <option value="Dione">Voz Masculina 1</option>
-                <option value="Iapetus">Voz Masculina 2</option>
-                <option value="Hyperion">Voz Masculina 3</option>
-            </select>
+        <label>4. Escolha o Locutor(a) (clique para ouvir)</label>
+        <div id="voice-selection-grid" class="voice-grid">
+            <!-- Os cards dos locutores serão inseridos aqui pelo JavaScript -->
+        </div>
+
+        <div class="button-container">
             <button id="generate-btn">Gerar Narração</button>
         </div>
 
@@ -136,22 +68,97 @@
     </div>
 
     <script>
+        // --- BANCO DE DADOS DA APLICAÇÃO ---
+        const prompts = {
+            spot_comercial: { padrao: "Read this in a standard, professional commercial voice. The tone should be clear, confident, and engaging.", impacto: "Deliver this like a powerful, attention-grabbing commercial spot. Use a strong, deep voice. The tone should be impactful and highly persuasive, like a movie trailer.", animada: "This requires an upbeat, energetic, and friendly tone suitable for a lively commercial. Sound excited, happy, and positive." },
+            carro_de_som: { padrao: "This is for a 'sound car' advertisement. The voice needs to be very clear, loud, and with heavy emphasis. A classic announcer-like quality.", impacto: "A very high-energy 'sound car' voice. It should sound almost like shouting, but with controlled pitch." },
+            vinheta: { padrao: "This is a short audio logo or station ID. Read it in a punchy, memorable, and professional broadcast style.", jovem: "A modern, fresh, and energetic style for a station ID aimed at a young audience." },
+            vsl: { padrao: "Read this as a narrator for a video sales letter. The tone should be conversational, trustworthy, and persuasive.", urgente: "This is for a VSL with a sense of urgency. The pace should be slightly faster, the tone more intense." },
+            audio_institucional: { padrao: "A corporate, institutional narration. The voice should be calm, serious, professional, and trustworthy.", inspirador: "An inspiring and motivational corporate tone. The voice should be warm and uplifting." }
+        };
+
+        const voices = [
+            // --- LOCUTORAS ---
+            { id: 'aoede', name: 'Laura', imageUrl: 'https://placehold.co/100x100/f8c291/2c3e50?text=L', audioUrl: 'assets/audio/aoede.wav' },
+            { id: 'autonoe', name: 'Beatriz', imageUrl: 'https://placehold.co/100x100/e58e26/2c3e50?text=B', audioUrl: 'assets/audio/autonoe.wav' },
+            { id: 'callirrhoe', name: 'Vanessa', imageUrl: 'https://placehold.co/100x100/f0932b/2c3e50?text=V', audioUrl: 'assets/audio/callirrhoe.wav' },
+            { id: 'charon', name: 'Diana', imageUrl: 'https://placehold.co/100x100/fabe5d/2c3e50?text=D', audioUrl: 'assets/audio/charon.wav' },
+            { id: 'despina', name: 'Helena', imageUrl: 'https://placehold.co/100x100/f9ca24/2c3e50?text=H', audioUrl: 'assets/audio/despina.wav' },
+            { id: 'euterpe', name: 'Júlia', imageUrl: 'https://placehold.co/100x100/ffbe76/2c3e50?text=J', audioUrl: 'assets/audio/euterpe.wav' },
+            { id: 'hyperion', name: 'Patrícia', imageUrl: 'https://placehold.co/100x100/f6e58d/2c3e50?text=P', audioUrl: 'assets/audio/hyperion.wav' },
+            { id: 'pulcherrima', name: 'Camila', imageUrl: 'https://placehold.co/100x100/ffc048/2c3e50?text=C', audioUrl: 'assets/audio/pulcherrima.wav' },
+            { id: 'umbriel', name: 'Mariana', imageUrl: 'https://placehold.co/100x100/f1c40f/2c3e50?text=M', audioUrl: 'assets/audio/umbriel.wav' },
+            { id: 'vindemiatrix', name: 'Amanda', imageUrl: 'https://placehold.co/100x100/e67e22/2c3e50?text=A', audioUrl: 'assets/audio/vindemiatrix.wav' },
+            // --- LOCUTORES ---
+            { id: 'achernar', name: 'Lucas', imageUrl: 'https://placehold.co/100x100/30336b/ecf0f1?text=L', audioUrl: 'assets/audio/achernar.wav' },
+            { id: 'achird', name: 'André', imageUrl: 'https://placehold.co/100x100/130f40/ecf0f1?text=A', audioUrl: 'assets/audio/achird.wav' },
+            { id: 'algenib', name: 'Fábio', imageUrl: 'https://placehold.co/100x100/0c2461/ecf0f1?text=F', audioUrl: 'assets/audio/algenib.wav' },
+            { id: 'algieba', name: 'Bruno', imageUrl: 'https://placehold.co/100x100/227093/ecf0f1?text=B', audioUrl: 'assets/audio/algieba.wav' },
+            { id: 'alnilam', name: 'Gustavo', imageUrl: 'https://placehold.co/100x100/218c74/ecf0f1?text=G', audioUrl: 'assets/audio/alnilam.wav' },
+            { id: 'dione', name: 'Rafael', imageUrl: 'https://placehold.co/100x100/34495e/ecf0f1?text=R', audioUrl: 'assets/audio/dione.wav' },
+            { id: 'encladus', name: 'Sérgio', imageUrl: 'https://placehold.co/100x100/2c3e50/ecf0f1?text=S', audioUrl: 'assets/audio/encladus.wav' },
+            { id: 'erinome', name: 'Thiago', imageUrl: 'https://placehold.co/100x100/1e3799/ecf0f1?text=T', audioUrl: 'assets/audio/erinome.wav' },
+            { id: 'fenrir', name: 'Eduardo', imageUrl: 'https://placehold.co/100x100/079992/ecf0f1?text=E', audioUrl: 'assets/audio/fenrir.wav' },
+            { id: 'gacrux', name: 'Leandro', imageUrl: 'https://placehold.co/100x100/38ada9/ecf0f1?text=L', audioUrl: 'assets/audio/gacrux.wav' },
+            { id: 'iapetus', name: 'Ricardo', imageUrl: 'https://placehold.co/100x100/1B1464/ecf0f1?text=R', audioUrl: 'assets/audio/iapetus.wav' },
+            { id: 'kore', name: 'Vitor', imageUrl: 'https://placehold.co/100x100/40407a/ecf0f1?text=V', audioUrl: 'assets/audio/kore.wav' },
+            { id: 'laomedeia', name: 'Rodrigo', imageUrl: 'https://placehold.co/100x100/273c75/ecf0f1?text=R', audioUrl: 'assets/audio/laomedeia.wav' },
+            { id: 'leda', name: 'Felipe', imageUrl: 'https://placehold.co/100x100/3c6382/ecf0f1?text=F', audioUrl: 'assets/audio/leda.wav' },
+            { id: 'orus', name: 'Fernando', imageUrl: 'https://placehold.co/100x100/0a3d62/ecf0f1?text=F', audioUrl: 'assets/audio/orus.wav' },
+            { id: 'puck', name: 'Paulo', imageUrl: 'https://placehold.co/100x100/0984e3/ecf0f1?text=P', audioUrl: 'assets/audio/puck.wav' },
+            { id: 'rasalgethi', name: 'Cristiano', imageUrl: 'https://placehold.co/100x100/7f8c8d/ecf0f1?text=C', audioUrl: 'assets/audio/rasalgethi.wav' },
+            { id: 'sadachbia', name: 'Marcelo', imageUrl: 'https://placehold.co/100x100/2d3436/ecf0f1?text=M', audioUrl: 'assets/audio/sadachbia.wav' },
+            { id: 'sadaltager', name: 'Guilherme', imageUrl: 'https://placehold.co/100x100/636e72/ecf0f1?text=G', audioUrl: 'assets/audio/sadaltager.wav' },
+            { id: 'schedar', name: 'Roberto', imageUrl: 'https://placehold.co/100x100/8e44ad/ecf0f1?text=R', audioUrl: 'assets/audio/schedar.wav' },
+            { id: 'sulafat', name: 'Alexandre', imageUrl: 'https://placehold.co/100x100/9b59b6/ecf0f1?text=A', audioUrl: 'assets/audio/sulafat.wav' },
+            { id: 'zephyr', name: 'Renato', imageUrl: 'https://placehold.co/100x100/be2edd/ecf0f1?text=R', audioUrl: 'assets/audio/zephyr.wav' },
+            { id: 'zubenelgenubi', name: 'Leonardo', imageUrl: 'https://placehold.co/100x100/8e44ad/ecf0f1?text=L', audioUrl: 'assets/audio/zubenelgenubi.wav' }
+        ];
+
+        // --- LÓGICA DA PÁGINA ---
         const textInput = document.getElementById('text-input');
-        const styleInput = document.getElementById('style-input'); // Pega o novo campo
+        const formatSelect = document.getElementById('format-select');
+        const styleSelect = document.getElementById('style-select');
+        const voiceGrid = document.getElementById('voice-selection-grid');
         const generateBtn = document.getElementById('generate-btn');
-        const voiceSelect = document.getElementById('voice-select');
         const statusMessage = document.getElementById('status-message');
         const audioPlayer = document.getElementById('audio-player');
+        
+        let selectedVoiceId = voices[0].id;
+        let audioSample = new Audio();
+
+        function renderVoiceCards() {
+            voiceGrid.innerHTML = '';
+            voices.forEach(voice => {
+                const isSelected = voice.id === selectedVoiceId;
+                const card = document.createElement('div');
+                card.className = `voice-card ${isSelected ? 'selected' : ''}`;
+                card.setAttribute('data-voice-id', voice.id);
+                card.innerHTML = `
+                    <img src="${voice.imageUrl}" alt="Locutor(a) ${voice.name}">
+                    <div class="voice-name">${voice.name}</div>
+                `;
+                card.addEventListener('click', () => handleVoiceSelection(voice));
+                voiceGrid.appendChild(card);
+            });
+        }
+
+        function handleVoiceSelection(voice) {
+            selectedVoiceId = voice.id;
+            audioSample.src = voice.audioUrl;
+            audioSample.play().catch(e => console.error("Erro ao tocar amostra:", e));
+            renderVoiceCards();
+        }
 
         generateBtn.addEventListener('click', async () => {
             const text = textInput.value.trim();
-            const voice = voiceSelect.value;
-            const style = styleInput.value.trim(); // Pega o valor do campo de estilo
+            const format = formatSelect.value;
+            const style = styleSelect.value;
+            const stylePrompt = (prompts[format] && prompts[format][style]) ? prompts[format][style] : prompts.spot_comercial.padrao;
 
             if (!text) {
                 statusMessage.textContent = 'Por favor, digite um texto para gerar o áudio.';
-                statusMessage.style.color = '#e74c3c';
-                return;
+                statusMessage.style.color = '#e74c3c'; return;
             }
 
             generateBtn.disabled = true;
@@ -160,18 +167,14 @@
             audioPlayer.style.display = 'none';
 
             try {
-                const response = await fetch('https://narrador-python-api.onrender.com/generate-audio', {
+                const response = await fetch('https://meu-narrador-virtual.onrender.com/generate-audio', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    // Adicionamos a chave 'style' ao corpo da requisição
-                    body: JSON.stringify({ text: text, voice: voice, style: style }),
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: text, voice: selectedVoiceId, style: stylePrompt }),
                 });
 
                 if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error || 'Ocorreu um erro no servidor.');
+                    const errorData = await response.json(); throw new Error(errorData.error || 'Ocorreu um erro no servidor.');
                 }
                 
                 const audioBlob = await response.blob();
@@ -179,10 +182,8 @@
                 audioPlayer.src = audioUrl;
                 audioPlayer.style.display = 'block';
                 audioPlayer.play();
-
                 statusMessage.textContent = 'Áudio gerado com sucesso!';
                 statusMessage.style.color = '#2ecc71';
-
             } catch (error) {
                 console.error('Erro:', error);
                 statusMessage.textContent = `Erro ao gerar áudio: ${error.message}`;
@@ -191,6 +192,8 @@
                 generateBtn.disabled = false;
             }
         });
+        
+        window.addEventListener('DOMContentLoaded', renderVoiceCards);
     </script>
 </body>
 </html>
