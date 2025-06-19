@@ -1,3 +1,6 @@
+# Para rodar este código, instale as dependências:
+# pip install google-genai Flask Flask-Cors
+
 import os
 import struct
 import io
@@ -6,10 +9,16 @@ from flask_cors import CORS
 from google import genai
 from google.genai import types
 
+# --- Configuração do Flask ---
 app = Flask(__name__)
+# CORS permite que a página HTML (rodando em um 'file://' ou outro domínio)
+# se comunique com este servidor (rodando em http://127.0.0.1:5000)
 CORS(app)
 
+# --- Funções do script original (sem modificações) ---
+
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
+    """Gera um cabeçalho WAV para os dados de áudio brutos."""
     parameters = parse_audio_mime_type(mime_type)
     bits_per_sample = parameters["bits_per_sample"]
     sample_rate = parameters["rate"]
@@ -19,6 +28,7 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     block_align = num_channels * bytes_per_sample
     byte_rate = sample_rate * block_align
     chunk_size = 36 + data_size
+
     header = struct.pack(
         "<4sI4s4sIHHIIHH4sI",
         b"RIFF", chunk_size, b"WAVE", b"fmt ", 16, 1,
@@ -28,6 +38,7 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     return header + audio_data
 
 def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
+    """Extrai bits por amostra e taxa de amostragem do MIME type."""
     bits_per_sample = 16
     rate = 24000
     parts = mime_type.split(";")
@@ -46,71 +57,80 @@ def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
                 pass
     return {"bits_per_sample": bits_per_sample, "rate": rate}
 
-@app.route('/')
-def home():
-    """Esta rota não é usada quando o frontend está na Hostinger, mas é bom mantê-la."""
-    return "Backend do Gerador de Narração está online."
+# --- Rota da API ---
 
 @app.route('/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
+    """Endpoint para receber texto e retornar o áudio gerado."""
+    
+    # 1. Verifica se a chave da API está configurada
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        print("ERRO: Variável de ambiente GEMINI_API_KEY não encontrada.")
+        print("ERRO: A variável de ambiente GEMINI_API_KEY não foi definida.")
         return jsonify({"error": "Configuração do servidor incompleta: Chave da API ausente."}), 500
 
+    # 2. Obtém os dados da requisição (texto e voz)
     data = request.get_json()
     text_to_narrate = data.get('text')
-    voice_name = data.get('voice', 'Aoede')
-    # Pega as instruções de estilo da requisição. Retorna None se não for enviado.
-    style_instructions_text = data.get('style')
+    voice_name = data.get('voice', 'Aoede') # Usa 'Aoede' como padrão se não for fornecida
 
     if not text_to_narrate:
         return jsonify({"error": "O texto não pode estar vazio."}), 400
 
     try:
+        # 3. Configura o cliente da API do Gemini
         client = genai.Client(api_key=api_key)
         model = "gemini-2.5-flash-preview-tts"
+        
         contents = [types.Content(role="user", parts=[types.Part.from_text(text=text_to_narrate)])]
-
-        # --- LÓGICA ATUALIZADA PARA O SPEECH CONFIG ---
-        # Cria um dicionário com os parâmetros básicos de configuração da fala
-        speech_config_params = {
-            "voice_config": types.VoiceConfig(
-                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
-            )
-        }
-
-        # Se o texto de instrução de estilo existir (não for nulo ou vazio),
-        # adiciona-o ao dicionário de parâmetros.
-        if style_instructions_text:
-            speech_config_params["style_instructions"] = style_instructions_text
-
-        # Cria o objeto SpeechConfig usando os parâmetros preparados
-        speech_config = types.SpeechConfig(**speech_config_params)
         
         generate_content_config = types.GenerateContentConfig(
             response_modalities=["audio"],
-            speech_config=speech_config, # Usa o objeto de configuração que acabamos de criar
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
+                )
+            ),
         )
         
+        # 4. Gera o áudio em streaming e armazena em memória
         audio_buffer = bytearray()
-        audio_mime_type = "audio/L16;rate=24000"
+        audio_mime_type = "audio/L16;rate=24000" # Mime type padrão
         
-        for chunk in client.models.generate_content_stream(model=model, contents=contents, config=generate_content_config):
-            if (chunk.candidates and chunk.candidates[0].content and
-                chunk.candidates[0].content.parts and chunk.candidates[0].content.parts[0].inline_data and
-                chunk.candidates[0].content.parts[0].inline_data.data):
+        for chunk in client.models.generate_content_stream(
+            model=model,
+            contents=contents,
+            config=generate_content_config,
+        ):
+            if (
+                chunk.candidates and chunk.candidates[0].content and
+                chunk.candidates[0].content.parts and
+                chunk.candidates[0].content.parts[0].inline_data and
+                chunk.candidates[0].content.parts[0].inline_data.data
+            ):
                 inline_data = chunk.candidates[0].content.parts[0].inline_data
                 audio_buffer.extend(inline_data.data)
+                # Atualiza o mime type com o primeiro que recebermos, pois contém os parâmetros corretos
                 audio_mime_type = inline_data.mime_type
 
         if not audio_buffer:
             return jsonify({"error": "Não foi possível gerar o áudio."}), 500
 
+        # 5. Converte os dados brutos para o formato WAV
         wav_data = convert_to_wav(bytes(audio_buffer), audio_mime_type)
         
-        return send_file(io.BytesIO(wav_data), mimetype='audio/wav', as_attachment=False)
+        # 6. Envia o arquivo de áudio como resposta
+        return send_file(
+            io.BytesIO(wav_data),
+            mimetype='audio/wav',
+            as_attachment=False # Envia para ser tocado no navegador, não baixado
+        )
 
     except Exception as e:
         print(f"Ocorreu um erro na API: {e}")
         return jsonify({"error": f"Erro ao contatar a API do Gemini: {e}"}), 500
+
+if __name__ == "__main__":
+    print("Servidor de narração iniciado em http://127.0.0.1:5000")
+    print("Certifique-se de que a variável de ambiente GEMINI_API_KEY está definida.")
+    app.run(debug=True, port=5000)

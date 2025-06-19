@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerador de Narração Virtual</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f4f7f9;
+            color: #333;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .container {
+            background-color: #ffffff;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 600px;
+            text-align: center;
+        }
+        h1 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+        }
+        p {
+            color: #7f8c8d;
+            margin-bottom: 30px;
+        }
+        label {
+            display: block;
+            text-align: left;
+            font-weight: bold;
+            color: #555;
+            margin-bottom: 8px;
+        }
+        textarea {
+            width: 100%;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #dfe4ea;
+            font-size: 16px;
+            line-height: 1.5;
+            resize: vertical;
+            margin-bottom: 20px;
+            box-sizing: border-box;
+        }
+        #text-input { height: 150px; }
+        #style-input { height: 80px; } /* Altura menor para o campo de estilo */
+
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        select {
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #dfe4ea;
+            font-size: 16px;
+            flex-grow: 1;
+            background-color: #fff;
+            cursor: pointer;
+        }
+        button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background-color 0.3s ease, transform 0.1s ease;
+        }
+        button:hover {
+            background-color: #2980b9;
+        }
+        button:active {
+            transform: scale(0.98);
+        }
+        button:disabled {
+            background-color: #bdc3c7;
+            cursor: not-allowed;
+        }
+        .status {
+            margin-top: 20px;
+            font-weight: 500;
+            min-height: 24px;
+            transition: color 0.3s ease;
+        }
+        audio {
+            width: 100%;
+            margin-top: 20px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Gerador de Narração Virtual</h1>
+        <p>Digite o texto, adicione instruções de estilo (em inglês) e clique em gerar.</p>
+
+        <label for="text-input">Texto para Narração</label>
+        <textarea id="text-input" placeholder="Digite seu texto aqui..."></textarea>
+        
+        <!-- NOVO CAMPO PARA INSTRUÇÕES DE ESTILO -->
+        <label for="style-input">Instruções de Estilo (em Inglês)</label>
+        <textarea id="style-input" placeholder="Ex: Read aloud in a warm and friendly tone. Emphasize the last sentence."></textarea>
+        
+        <div class="controls">
+             <select id="voice-select">
+                <option value="Aoede">Voz Feminina 1 (Padrão)</option>
+                <option value="Calypso">Voz Feminina 2</option>
+                <option value="Euterpe">Voz Feminina 3</option>
+                <option value="Dione">Voz Masculina 1</option>
+                <option value="Iapetus">Voz Masculina 2</option>
+                <option value="Hyperion">Voz Masculina 3</option>
+            </select>
+            <button id="generate-btn">Gerar Narração</button>
+        </div>
+
+        <div id="status-message" class="status"></div>
+        <audio id="audio-player" controls></audio>
+    </div>
+
+    <script>
+        const textInput = document.getElementById('text-input');
+        const styleInput = document.getElementById('style-input'); // Pega o novo campo
+        const generateBtn = document.getElementById('generate-btn');
+        const voiceSelect = document.getElementById('voice-select');
+        const statusMessage = document.getElementById('status-message');
+        const audioPlayer = document.getElementById('audio-player');
+
+        generateBtn.addEventListener('click', async () => {
+            const text = textInput.value.trim();
+            const voice = voiceSelect.value;
+            const style = styleInput.value.trim(); // Pega o valor do campo de estilo
+
+            if (!text) {
+                statusMessage.textContent = 'Por favor, digite um texto para gerar o áudio.';
+                statusMessage.style.color = '#e74c3c';
+                return;
+            }
+
+            generateBtn.disabled = true;
+            statusMessage.textContent = 'Gerando áudio, por favor aguarde...';
+            statusMessage.style.color = '#3498db';
+            audioPlayer.style.display = 'none';
+
+            try {
+                const response = await fetch('https://narrador-python-api.onrender.com/generate-audio', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    // Adicionamos a chave 'style' ao corpo da requisição
+                    body: JSON.stringify({ text: text, voice: voice, style: style }),
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Ocorreu um erro no servidor.');
+                }
+                
+                const audioBlob = await response.blob();
+                const audioUrl = URL.createObjectURL(audioBlob);
+                audioPlayer.src = audioUrl;
+                audioPlayer.style.display = 'block';
+                audioPlayer.play();
+
+                statusMessage.textContent = 'Áudio gerado com sucesso!';
+                statusMessage.style.color = '#2ecc71';
+
+            } catch (error) {
+                console.error('Erro:', error);
+                statusMessage.textContent = `Erro ao gerar áudio: ${error.message}`;
+                statusMessage.style.color = '#e74c3c';
+            } finally {
+                generateBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>
