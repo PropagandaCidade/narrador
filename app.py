@@ -8,7 +8,7 @@ from google import genai
 from google.genai import types
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=["https://slateblue-ibis-310649.hostingersite.com"])
 
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     parameters = parse_audio_mime_type(mime_type)
