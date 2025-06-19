@@ -2,7 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const fetch = require("node-fetch");
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY; // Sua chave Gemini em variável de ambiente no Render
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 const app = express();
 app.use(cors());
@@ -15,7 +15,7 @@ app.post("/generate-audio", async (req, res) => {
       return res.status(400).json({ error: "Dados incompletos." });
     }
 
-    // Chamada para Gemini TTS
+    // Chamada para Gemini TTS (atualizada)
     const geminiResponse = await fetch(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro-preview-tts:generateContent?key=" + GEMINI_API_KEY,
       {
@@ -30,10 +30,15 @@ app.post("/generate-audio", async (req, res) => {
               ]
             }
           ],
-          generationConfig: { temperature: 1 },
-          tools: [],
-          responseMimeType: "audio/wav",
-          voice: { name: voice }
+          tools: [
+            {
+              speechSynthesisToolConfig: {
+                voice: { name: voice },
+                audioEncoding: "LINEAR16" // ou "MP3" para .mp3
+              }
+            }
+          ],
+          generationConfig: { temperature: 1 }
         }),
       }
     );
@@ -43,7 +48,6 @@ app.post("/generate-audio", async (req, res) => {
     // Procura o audio gerado:
     const part = data.candidates?.[0]?.content?.parts?.[0];
     if (!part?.inlineData?.data) {
-      // Mostra mensagem de erro detalhada se vier do Gemini:
       console.error("Erro Gemini:", JSON.stringify(data));
       return res.status(500).json({ error: "Falha ao gerar áudio.", details: data });
     }
@@ -53,7 +57,7 @@ app.post("/generate-audio", async (req, res) => {
       model_used: "pro"
     });
   } catch (err) {
-    console.error("ERRO NO BACKEND:", err); // <-- Agora mostra erro no log do Render
+    console.error("ERRO NO BACKEND:", err);
     res.status(500).json({ error: String(err) });
   }
 });
