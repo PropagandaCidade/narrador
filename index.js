@@ -2,7 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const fetch = require("node-fetch");
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY; // A chave estará nas variáveis de ambiente do Render
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY; // Sua chave Gemini em variável de ambiente no Render
 
 const app = express();
 app.use(cors());
@@ -43,7 +43,9 @@ app.post("/generate-audio", async (req, res) => {
     // Procura o audio gerado:
     const part = data.candidates?.[0]?.content?.parts?.[0];
     if (!part?.inlineData?.data) {
-      return res.status(500).json({ error: "Falha ao gerar áudio." });
+      // Mostra mensagem de erro detalhada se vier do Gemini:
+      console.error("Erro Gemini:", JSON.stringify(data));
+      return res.status(500).json({ error: "Falha ao gerar áudio.", details: data });
     }
 
     res.json({
@@ -51,6 +53,7 @@ app.post("/generate-audio", async (req, res) => {
       model_used: "pro"
     });
   } catch (err) {
+    console.error("ERRO NO BACKEND:", err); // <-- Agora mostra erro no log do Render
     res.status(500).json({ error: String(err) });
   }
 });
