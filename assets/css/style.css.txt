@@ -1,0 +1,78 @@
+body {
+  background: #181c24;
+  color: #e4e6eb;
+  font-family: 'Inter', Arial, sans-serif;
+  margin: 0;
+  min-height: 100vh;
+}
+
+.dashboard {
+  max-width: 960px;
+  margin: 40px auto;
+  background: rgba(34,38,50, 0.85);
+  border-radius: 24px;
+  box-shadow: 0 6px 32px 0 #090a1e80;
+  padding: 32px 24px;
+}
+
+header {
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+h1 {
+  font-size: 2.3rem;
+  letter-spacing: .01em;
+  font-weight: 700;
+  background: linear-gradient(90deg, #ff3576 10%, #00d2ff 90%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.voice-card {
+  background: rgba(44, 48, 68, 0.92);
+  border-radius: 18px;
+  box-shadow: 0 2px 8px #0a0a2330;
+  margin: 12px;
+  padding: 16px 14px 10px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transition: box-shadow 0.2s, border 0.2s;
+  cursor: pointer;
+  border: 2px solid transparent;
+}
+.voice-card.selected {
+  border: 2px solid #36eaff;
+  box-shadow: 0 0 16px #36eaff44;
+}
+
+.voice-card img {
+  width: 78px; height: 78px;
+  border-radius: 50%;
+  object-fit: cover;
+  margin-bottom: 12px;
+  border: 3px solid #222c;
+}
+
+.voice-name {
+  font-size: 1.14rem;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.voice-specialty {
+  font-size: 0.95rem;
+  color: #aaa;
+}
+
+#main-component-area {
+  min-height: 440px;
+}
+
+/* Adicione responsividade */
+@media (max-width: 600px) {
+  .dashboard { padding: 8px 3vw; }
+  .voice-card { margin: 10px 2vw; }
+  h1 { font-size: 1.5rem; }
+}
