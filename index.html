@@ -167,7 +167,7 @@
             audioPlayer.style.display = 'none';
 
             try {
-                const response = await fetch('https://meu-narrador-virtual.onrender.com/generate-audio', {
+                const response = await fetch('https://narrador-python-api.onrender.com/generate-audio', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ text: text, voice: selectedVoiceId, style: stylePrompt }),
