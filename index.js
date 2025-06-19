@@ -1,6 +1,6 @@
 const express = require("express");
 const cors = require("cors");
-const fetch = require("node-fetch");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
@@ -15,33 +15,23 @@ app.post("/generate-audio", async (req, res) => {
       return res.status(400).json({ error: "Dados incompletos." });
     }
 
-    const geminiResponse = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro-preview-tts:generateContent?key=" + GEMINI_API_KEY,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: "user",
-              parts: [
-                { text: `${style}\n\n${text}` }
-              ]
-            }
-          ],
-          generationConfig: { temperature: 1 },
-          voice: { name: voice },
-          audioConfig: { audioEncoding: "LINEAR16" }
-        }),
-      }
-    );
+    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
-    const data = await geminiResponse.json();
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro-preview-tts" });
 
-    const part = data.candidates?.[0]?.content?.parts?.[0];
+    // Monta prompt com style + texto
+    const prompt = style ? `${style}\n\n${text}` : text;
+
+    const result = await model.generateContent({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 1 },
+      voice: { name: voice }, // Aqui a escolha de voz!
+    });
+
+    const part = result.response.candidates?.[0]?.content?.parts?.[0];
     if (!part?.inlineData?.data) {
-      console.error("Erro Gemini:", JSON.stringify(data));
-      return res.status(500).json({ error: "Falha ao gerar áudio.", details: data });
+      console.error("Erro Gemini:", JSON.stringify(result.response));
+      return res.status(500).json({ error: "Falha ao gerar áudio.", details: result.response });
     }
 
     res.json({

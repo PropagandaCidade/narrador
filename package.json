@@ -1,10 +1,14 @@
 {
-  "name": "narrador-python-api",
+  "name": "painel-locutores-backend",
   "version": "1.0.0",
   "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
   "dependencies": {
+    "@google/generative-ai": "^0.7.0",
     "cors": "^2.8.5",
-    "express": "^4.18.2",
-    "node-fetch": "^2.6.7"
+    "express": "^4.18.2"
   }
 }
