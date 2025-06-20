@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Estúdio de Narração Virtual</title>
-    <!-- Link para o nosso arquivo CSS externo -->
-    <link rel="stylesheet" href="assets/css/style.css">
+    <!-- Link para o nosso arquivo CSS externo com Cache Busting -->
+    <link rel="stylesheet" href="assets/css/style.css?v=1.1">
 </head>
 <body>
 
@@ -26,6 +26,11 @@
                 <!-- As opções serão preenchidas dinamicamente pelo main.js -->
                 <select id="style-select"></select>
             </div>
+            <div>
+                <label>4. Velocidade</label>
+                <!-- As opções serão preenchidas dinamicamente pelo main.js -->
+                <select id="speed-select"></select>
+            </div>
         </div>
         
         <label>Preview do Prompt (Enviado para a IA)</label>
@@ -33,12 +38,12 @@
             Digite um texto para ver o prompt final aqui.
         </div>
         
-        <label>4. Escolha a Locutora (clique para ouvir)</label>
+        <label>5. Escolha a Locutora (clique para ouvir)</label>
         <div id="female-voice-grid" class="voice-grid">
             <!-- Os cards das locutoras serão inseridos aqui pelo main.js -->
         </div>
 
-        <label>5. Escolha o Locutor (clique para ouvir)</label>
+        <label>6. Escolha o Locutor (clique para ouvir)</label>
         <div id="male-voice-grid" class="voice-grid">
             <!-- Os cards dos locutores serão inseridos aqui pelo main.js -->
         </div>
@@ -48,18 +53,17 @@
         </div>
 
         <div id="status-message" class="status"></div>
+        <div id="model-info" class="model-info"></div>
         <audio id="audio-player" controls></audio>
     </div>
 
     <!-- 
-      Scripts carregados no final do body para melhor performance.
-      A ORDEM É IMPORTANTE: primeiro carregamos os dados (prompts e vozes), 
-      depois carregamos o script principal (main.js) que usa esses dados.
-      O atributo 'defer' garante que eles só executem após a página ser totalmente carregada.
+      Scripts carregados no final do body para melhor performance com Cache Busting.
+      A ORDEM É IMPORTANTE: primeiro os dados, depois a lógica.
     -->
-    <script src="assets/js/prompts.js" defer></script>
-    <script src="assets/js/voices.js" defer></script>
-    <script src="assets/js/main.js" defer></script>
+    <script src="assets/js/prompts.js?v=1.1" defer></script>
+    <script src="assets/js/voices.js?v=1.1" defer></script>
+    <script src="assets/js/main.js?v=1.1" defer></script>
 
 </body>
 </html>
