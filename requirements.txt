@@ -3,3 +3,4 @@ flask-cors
 python-dotenv
 google-genai
 pydub==0.25.1
+gunicorn
