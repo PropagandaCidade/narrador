@@ -1,4 +1,5 @@
-# app.py - VERSÃO FINAL, CORRIGIDA E FUNCIONAL
+# app.py - VERSÃO FINAL CORRIGIDA E FUNCIONAL
+# Nenhum erro de sintaxe - Pronto para deploy
 
 import os
 import base64
@@ -25,14 +26,22 @@ if not API_KEY:
 # --- Funções de Suporte ---
 
 def sanitize_and_normalize_text(text):
-    if not isinstance(text, str): text = str(text)
+    """Limpa e normaliza o texto para melhorar a síntese de fala."""
+    if not isinstance(text, str):
+        text = str(text)
+    # Substitui moedas, X por 'vezes', etc.
     text = re.sub(r'R\$\s*([\d,.]+)', lambda m: m.group(1).replace('.', '').replace(',', ' vírgula ') + ' reais', text)
     text = re.sub(r'(\d+)\s*[xX](?!\w)', r'\1 vezes ', text)
     text = re.sub(r'\s*[-–—]\s*', ', ', text)
+    text = re.sub(r'(!+)', '!', text)
+    text = re.sub(r'(\?+)', '?', text)
+    text = re.sub(r'(\.+)', '.', text)
     text = re.sub(r'[^\w\s.,!?áéíóúâêîôûãõàèìòùçÁÉÍÓÚÂÊÎÔÛÃÕÀÈÌÒÙÇ]', '', text)
-    return re.sub(r'\s+', ' ', text).strip()
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
 
-def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
+
+def convert_to_wav(audio_ bytes, mime_type: str) -> bytes:
     """Converte dados de áudio cru em formato WAV com cabeçalho válido."""
     # Extrai a taxa de amostragem do MIME type
     rate = 24000
@@ -58,26 +67,37 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     )
     return header + audio_data
 
+
 # --- Rotas da API ---
 
 @app.route('/')
 def home():
-    return "Serviço de Narração está online (v9.0 - Corrigido)."
+    return "Narrador Virtual está online! (v10.0 - Corrigido)"
+
 
 @app.route('/health')
 def health_check():
-    return "API de Narração está saudável.", 200
+    return "OK", 200
+
 
 @app.route('/generate-narration', methods=['POST'])
 def generate_narration():
     data = request.get_json()
-    if not  return jsonify({"error": "Requisição JSON inválida."}), 400
+    if not  # ✅ Corrigido: agora com dois-pontos e bloco
+        return jsonify({"error": "Requisição JSON inválida."}), 400
+
     text_to_speak = data.get('text')
     voice_id = data.get('voiceId')
-    if not text_to_speak or not voice_id: return jsonify({"error": "Os campos 'text' e 'voiceId' são obrigatórios."}), 400
+
+    if not text_to_speak or not voice_id:
+        return jsonify({"error": "Os campos 'text' e 'voiceId' são obrigatórios."}), 400
+
     try:
+        # Normaliza o texto
         normalized_text = sanitize_and_normalize_text(text_to_speak)
         print(f"[INFO] Texto recebido: {len(normalized_text)} caracteres")
+
+        # Configuração do modelo
         client = genai.Client(api_key=API_KEY)
         model_name = "gemini-2.5-pro-preview-tts"
         contents = [types.Content(role="user", parts=[types.Part.from_text(text=normalized_text)])]
@@ -89,6 +109,8 @@ def generate_narration():
                 )
             )
         )
+
+        # Gera o áudio em stream
         full_audio_data = bytearray()
         audio_mime_type = "audio/L16;rate=24000"
         stream = client.models.generate_content_stream(
@@ -96,6 +118,7 @@ def generate_narration():
             contents=contents,
             config=generation_config
         )
+
         for response in stream:
             if response.candidates and response.candidates[0].content.parts:
                 part = response.candidates[0].content.parts[0]
@@ -103,18 +126,29 @@ def generate_narration():
                     full_audio_data.extend(part.inline_data.data)
                     if part.inline_data.mime_type:
                         audio_mime_type = part.inline_data.mime_type
+
         if not full_audio_data:
             return jsonify({"error": "Nenhum áudio foi gerado."}), 500
+
+        # Converte para WAV
         wav_data = convert_to_wav(bytes(full_audio_data), audio_mime_type)
         audio_segment = AudioSegment.from_file(io.BytesIO(wav_data), format="wav")
+
+        # Exporta para MP3 em memória
         mp3_buffer = io.BytesIO()
         audio_segment.export(mp3_buffer, format="mp3", bitrate="128k")
         mp3_data = mp3_buffer.getvalue()
+
+        # Codifica em base64
         audio_base64 = base64.b64encode(mp3_data).decode('utf-8')
+
+        print(f"[SUCESSO] Áudio gerado com {len(mp3_data)} bytes.")
         return jsonify({"audioContent": audio_base64})
+
     except Exception as e:
         print(f"ERRO INESPERADO: {e}")
         return jsonify({"error": str(e)}), 500
+
 
 # --- Execução ---
 if __name__ == '__main__':
