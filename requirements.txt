@@ -1,6 +1,4 @@
-flask
-flask-cors
-python-dotenv
+Flask
+Flask-Cors
 google-genai
-pydub==0.25.1
 gunicorn
