@@ -33,7 +33,8 @@ def sanitize_and_normalize_text(text):
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-def convert_to_wav(audio_ bytes, mime_type: str) -> bytes:
+# CORRETO - Nome de parâmetro válido
+def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     """Converte dados de áudio cru em formato WAV com cabeçalho válido."""
     parameters = parse_audio_mime_type(mime_type)
     bits_per_sample = parameters.get("bits_per_sample", 16)
