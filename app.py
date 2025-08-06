@@ -119,7 +119,7 @@ def generate_narration():
         wav_data = convert_to_wav(bytes(full_audio_data), audio_mime_type)
         audio_segment = AudioSegment.from_file(io.BytesIO(wav_data), format="wav")
         mp3_file_in_memory = io.BytesIO()
-        audio_segment.export(mp3_file_in_memory, format="mp3", bitrate="64k")
+        audio_segment.export(mp3_file_in_memory, format="mp3", bitrate="320k")
         mp3_data = mp3_file_in_memory.getvalue()
         audio_base64 = base64.b64encode(mp3_data).decode('utf-8')
         return jsonify({"audioContent": audio_base64})
