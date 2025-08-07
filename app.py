@@ -1,11 +1,11 @@
-# app.py - VERSÃO FINAL E DEFINITIVA, USANDO O MÉTODO OFICIAL DO GOOGLE
+# app.py - VERSÃO FINAL E DEFINITIVA
 import os
 import io
 import struct
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
 
-# Importações corretas para a API do Gemini, conforme o exemplo oficial
+# Importações corretas para a API do Gemini
 import google.generativeai as genai
 from google.generativeai import types
 
@@ -14,8 +14,7 @@ app = Flask(__name__)
 # Configuração de CORS que já está funcionando
 CORS(app) 
 
-# --- FUNÇÕES AUXILIARES DO CÓDIGO OFICIAL DO GOOGLE ---
-# Elas garantem que o áudio seja convertido para um WAV válido.
+# Suas funções auxiliares, que a lógica de streaming precisa
 def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
     rate = 24000
     if mime_type and "rate=" in mime_type:
@@ -43,7 +42,6 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
         block_align, bits_per_sample, b"data", data_size
     )
     return header + audio_data
-# --- FIM DAS FUNÇÕES AUXILIARES ---
 
 @app.route('/')
 def home():
@@ -52,7 +50,7 @@ def home():
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
-    """Endpoint principal que gera o áudio usando o método de streaming oficial."""
+    """Endpoint principal que gera o áudio usando o método de baixo nível oficial."""
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         return jsonify({"error": "Chave de API do servidor não configurada."}), 500
@@ -68,38 +66,36 @@ def generate_audio_endpoint():
         return jsonify({"error": "Os campos 'text' e 'voice' são obrigatórios."}), 400
 
     try:
-        # 1. Inicializa o cliente, como no exemplo oficial
-        # O erro 'no attribute Client' acontecia pelo ambiente instável, agora deve funcionar.
         genai.configure(api_key=api_key)
         
-        # 2. Define o modelo TTS correto
         tts_model = genai.GenerativeModel(model_name='models/text-to-speech')
 
         print(f"Gerando áudio para: '{text_to_narrate[:50]}...' com voz: '{voice_name}'")
 
-        # 3. Gera a resposta usando a estrutura oficial e completa
-        response = tts_model.generate_content(
-            contents=[text_to_narrate],
-            generation_config=types.GenerationConfig(
-                response_modalities=[types.GenerateContentResponse.AUDIO],
-                speech_config=types.SpeechConfig(
-                    voice_config=types.VoiceConfig(
-                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                            voice_name=voice_name
-                        )
+        # --- A CORREÇÃO FINAL ESTÁ AQUI ---
+        # A API espera uma string "audio", não uma constante.
+        generation_config = types.GenerateContentConfig(
+            response_modalities=["audio"], # <-- ESTA É A LINHA CORRIGIDA
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name=voice_name
                     )
                 )
             )
         )
         
-        # 4. Extrai os dados de áudio da resposta
+        response = tts_model.generate_content(
+            contents=[text_to_narrate],
+            config=generation_config
+        )
+        
         audio_part = response.candidates[0].content.parts[0]
         wav_data = audio_part.inline_data.data
         
         if not wav_data:
             return jsonify({"error": "Não foi possível gerar o áudio."}), 500
         
-        # 5. Prepara e envia o arquivo de áudio como resposta
         http_response = make_response(send_file(
             io.BytesIO(wav_data),
             mimetype='audio/wav',
@@ -111,7 +107,6 @@ def generate_audio_endpoint():
         return http_response
 
     except Exception as e:
-        # Captura e retorna qualquer erro vindo da API do Google
         error_message = f"Erro ao contatar a API do Google Gemini: {e}"
         print(f"ERRO CRÍTICO NA API: {error_message}")
         return jsonify({"error": error_message}), 500
