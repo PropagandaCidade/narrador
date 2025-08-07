@@ -7,15 +7,18 @@ WORKDIR /app
 # Copiamos o arquivo de dependências
 COPY requirements.txt .
 
-# --- A CORREÇÃO CIRÚRGICA ---
-# 1. Instala as dependências (incluindo o pacote conflitante)
-# 2. IMEDIATAMENTE DESINSTALA o 'google-api-python-client' que causa o conflito.
-# 3. Testa a importação novamente para garantir que o ambiente agora está limpo.
+# --- A CIRURGIA DE FORÇA BRUTA ---
+# 1. Instala tudo, sabendo que vai criar um conflito.
+# 2. USA rm -rf PARA APAGAR COMPLETAMENTE a pasta 'google' corrompida.
+# 3. REINSTALA a biblioteca correta em um ambiente agora limpo.
+# 4. TESTA a importação para provar que a cirurgia funcionou.
 RUN pip install --no-cache-dir -r requirements.txt \
-    && echo "--- DESINSTALANDO PACOTE CONFLITANTE ---" \
-    && pip uninstall -y google-api-python-client \
-    && echo "--- TESTANDO IMPORTAÇÃO APÓS A CORREÇÃO ---" \
-    && python -c "from google import genai; print('SUCESSO! O MÓDULO GENAI FOI IMPORTADO CORRETAMENTE APÓS A CORREÇÃO!')"
+    && echo "--- LIMPANDO O NAMESPACE 'google' FORÇADAMENTE ---" \
+    && rm -rf /usr/local/lib/python3.11/site-packages/google \
+    && echo "--- REINSTALANDO 'google-generativeai' EM UM AMBIENTE LIMPO ---" \
+    && pip install --no-cache-dir --force-reinstall google-generativeai \
+    && echo "--- TESTE FINAL DE IMPORTAÇÃO PÓS-CIRURGIA ---" \
+    && python -c "from google import genai; print('VITÓRIA! O namespace foi limpo e a importação funcionou!')"
 
 # Copiamos todo o resto do código da sua aplicação
 COPY . .
