@@ -14,35 +14,6 @@ app = Flask(__name__)
 # Configuração de CORS que já está funcionando
 CORS(app) 
 
-# Suas funções auxiliares, que a lógica de streaming precisa
-def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
-    rate = 24000
-    if mime_type and "rate=" in mime_type:
-        try:
-            rate_str = mime_type.split("rate=")[1].split(";")[0]
-            rate = int(rate_str)
-        except (ValueError, IndexError):
-            pass
-    return {"rate": rate}
-
-def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
-    parameters = parse_audio_mime_type(mime_type)
-    sample_rate = parameters["rate"]
-    bits_per_sample = 16
-    num_channels = 1
-    data_size = len(audio_data)
-    bytes_per_sample = bits_per_sample // 8
-    block_align = num_channels * bytes_per_sample
-    byte_rate = sample_rate * block_align
-    chunk_size = 36 + data_size
-    header = struct.pack(
-        "<4sI4s4sIHHIIHH4sI",
-        b"RIFF", chunk_size, b"WAVE", b"fmt ", 16,
-        1, num_channels, sample_rate, byte_rate,
-        block_align, bits_per_sample, b"data", data_size
-    )
-    return header + audio_data
-
 @app.route('/')
 def home():
     """Rota para verificar se o serviço está online."""
@@ -107,6 +78,7 @@ def generate_audio_endpoint():
         return http_response
 
     except Exception as e:
+        # Captura e retorna qualquer erro vindo da API do Google
         error_message = f"Erro ao contatar a API do Google Gemini: {e}"
         print(f"ERRO CRÍTICO NA API: {error_message}")
         return jsonify({"error": error_message}), 500
