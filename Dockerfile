@@ -9,12 +9,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copia todo o restante do código do seu projeto local para o diretório /app no contêiner.
-# Isso inclui app.py, gunicorn.conf.py e qualquer outro arquivo.
 COPY . .
 
 # Informa ao Docker que o contêiner vai escutar na porta 8080
 EXPOSE 8080
 
 # Comando para rodar o servidor Gunicorn quando o contêiner iniciar.
-# O Railway deve usar este CMD por padrão se não houver um "Start Command" explícito.
+# O Railway DEVE usar este CMD se nenhum "Start Command" explícito for fornecido.
 CMD ["gunicorn", "-c", "/app/gunicorn.conf.py", "app:app"]
