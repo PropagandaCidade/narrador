@@ -14,5 +14,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Define o comando que vai iniciar a sua aplicação.
-# Ele usa a variável $PORT que o Railway fornece automaticamente.
-CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:$PORT"]
+# Usamos a forma "shell" para que a variável $PORT seja substituída corretamente.
+CMD gunicorn app:app --bind 0.0.0.0:$PORT
