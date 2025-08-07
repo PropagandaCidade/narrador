@@ -44,25 +44,22 @@ def generate_audio_endpoint():
     # A checagem de api_key foi removida pois a variável de ambiente já é configurada no Railway.
 
     data = request.get_json()
-    # Adicionada uma checagem para garantir que o corpo JSON foi recebido
-    if data is None:
+    # ADICIONADO: Imprime os dados recebidos para depuração. Verifique estes logs no Railway.
+    print(f"Dados recebidos do frontend: {data}")
+
+    if data is None: # Valida se o corpo JSON foi recebido corretamente
         return jsonify({"error": "Requisição inválida, corpo JSON ausente."}), 400
 
     text_to_narrate = data.get('text')
     voice_name = data.get('voice')
     style_instructions_text = data.get('style', '')
 
-    if not text_to_narrate:
+    if not text_to_narrate: # Valida se 'text' está presente e não vazio
         return jsonify({"error": "O campo 'text' não pode estar vazio."}), 400
-    if not voice_name:
+    if not voice_name: # Valida se 'voice' está presente e não vazio
         return jsonify({"error": "O campo 'voice' não pode estar vazio."}), 400
 
     try:
-        # Para testar se a rota está funcionando sem chamar a API do Google Gemini:
-        # Você pode descomentar as linhas de teste abaixo e comentar as linhas
-        # que chamam o genai.Client, e depois reverter as alterações.
-
-        # print("Teste: API Key obtida, chamando Google Gemini...") # Descomente para debug
         client = genai.Client(api_key=api_key)
         model = "gemini-2.5-pro-preview-tts"
 
@@ -84,8 +81,6 @@ def generate_audio_endpoint():
         audio_buffer = bytearray()
         audio_mime_type = "audio/L16;rate=24000"
 
-        # Esta chamada pode demorar e ser a causa do timeout (502) se a API do Google Gemini
-        # demorar muito para responder ou se a chave API não estiver completamente ativa.
         stream = client.models.generate_content_stream(model=model, contents=contents, config=generate_content_config)
 
         for chunk in stream:
@@ -108,8 +103,7 @@ def generate_audio_endpoint():
         return response
 
     except Exception as e:
-        # Se ocorrer um erro durante a chamada da API do Google Gemini ou processamento:
-        print(f"Ocorreu um erro na API: {e}") # Imprime o erro nos logs do Railway
+        print(f"Ocorreu um erro na API: {e}")
         return jsonify({"error": f"Erro ao contatar a API do Google Gemini: {e}"}), 500
 
 if __name__ == '__main__':
