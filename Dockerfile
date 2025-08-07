@@ -7,15 +7,15 @@ WORKDIR /app
 # Copiamos o arquivo de dependências
 COPY requirements.txt .
 
-# --- COMANDO DE DIAGNÓSTICO ---
-# 1. Instala as dependências
-# 2. Lista TUDO que foi instalado para vermos no log
-# 3. Tenta importar o 'genai' IMEDIATAMENTE após a instalação
+# --- A CORREÇÃO CIRÚRGICA ---
+# 1. Instala as dependências (incluindo o pacote conflitante)
+# 2. IMEDIATAMENTE DESINSTALA o 'google-api-python-client' que causa o conflito.
+# 3. Testa a importação novamente para garantir que o ambiente agora está limpo.
 RUN pip install --no-cache-dir -r requirements.txt \
-    && echo "--- PIP LIST DEPAVOLTA DA INSTALAÇÃO ---" \
-    && pip list \
-    && echo "--- TESTANDO A IMPORTAÇÃO DENTRO DO BUILD ---" \
-    && python -c "from google import genai; print('SUCESSO: O módulo genai foi importado corretamente durante o build!')"
+    && echo "--- DESINSTALANDO PACOTE CONFLITANTE ---" \
+    && pip uninstall -y google-api-python-client \
+    && echo "--- TESTANDO IMPORTAÇÃO APÓS A CORREÇÃO ---" \
+    && python -c "from google import genai; print('SUCESSO! O MÓDULO GENAI FOI IMPORTADO CORRETAMENTE APÓS A CORREÇÃO!')"
 
 # Copiamos todo o resto do código da sua aplicação
 COPY . .
