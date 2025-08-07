@@ -1,9 +1,12 @@
-# app.py - Versão FINAL com os PARÂMETROS da API CORRIGIDOS
+# app.py - Versão FINAL com a ESTRUTURA da API CORRIGIDA
 import os
 import io
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
+
+# Importa os módulos corretos
 import google.generativeai as genai
+from google.generativeai import types
 
 app = Flask(__name__)
 
@@ -34,28 +37,38 @@ def generate_audio_endpoint():
         
         print(f"Gerando áudio para o texto: '{text_to_narrate[:70]}...' com a voz: '{voice_name}'")
 
-        # --- CORREÇÃO FINAL ESTÁ AQUI ---
-        # A forma correta de passar os parâmetros de voz e modelo
-        # é através do objeto 'generation_config'.
-        tts_model = genai.GenerativeModel(model_name='gemini-1.5-flash') # Usamos um modelo base
-        
-        response = tts_model.generate_content(
-            text_to_narrate,
-            generation_config=genai.types.GenerationConfig(
-                candidate_count=1,
-                response_mime_type="audio/wav",
-                tts_model="text-to-speech-standard",
-                tts_voice=voice_name
+        # --- A CORREÇÃO FINAL ESTÁ AQUI ---
+        # 1. O modelo correto para TTS.
+        tts_model = genai.GenerativeModel(model_name='models/text-to-speech')
+
+        # 2. O conteúdo deve ser uma lista de partes.
+        contents = [text_to_narrate]
+
+        # 3. A configuração correta que envolve SpeechConfig e VoiceConfig.
+        generation_config = types.GenerateContentConfig(
+            response_modalities=[types.GenerateContentResponse.AUDIO],
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name=voice_name
+                    )
+                )
             )
+        )
+        
+        # 4. A chamada correta para a API
+        response = tts_model.generate_content(
+            contents=contents,
+            config=generation_config
         )
         # --- FIM DA CORREÇÃO FINAL ---
         
-        # A resposta de áudio agora está no primeiro candidato
-        if not (response.candidates and response.candidates[0].content.parts):
-             return jsonify({"error": "Não foi possível gerar o áudio. A resposta da API estava vazia."}), 500
-
+        # 5. Acessando o áudio da resposta
         audio_part = response.candidates[0].content.parts[0]
         wav_data = audio_part.inline_data.data
+        
+        if not wav_data:
+            return jsonify({"error": "Não foi possível gerar o áudio. A resposta da API estava vazia."}), 500
         
         http_response = make_response(send_file(
             io.BytesIO(wav_data),
