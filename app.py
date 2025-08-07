@@ -1,4 +1,4 @@
-# app.py - Versão FINAL com a chamada de API CORRIGIDA
+# app.py - Versão FINAL com os PARÂMETROS da API CORRIGIDOS
 import os
 import io
 from flask import Flask, request, jsonify, send_file, make_response
@@ -34,20 +34,28 @@ def generate_audio_endpoint():
         
         print(f"Gerando áudio para o texto: '{text_to_narrate[:70]}...' com a voz: '{voice_name}'")
 
-        # --- CORREÇÃO ESTÁ AQUI ---
-        # A função correta é 'generate_content' com os parâmetros específicos de TTS.
-        model = genai.GenerativeModel(model_name='models/text-to-speech')
+        # --- CORREÇÃO FINAL ESTÁ AQUI ---
+        # A forma correta de passar os parâmetros de voz e modelo
+        # é através do objeto 'generation_config'.
+        tts_model = genai.GenerativeModel(model_name='gemini-1.5-flash') # Usamos um modelo base
         
-        response = model.generate_content(
+        response = tts_model.generate_content(
             text_to_narrate,
-            voice=voice_name
+            generation_config=genai.types.GenerationConfig(
+                candidate_count=1,
+                response_mime_type="audio/wav",
+                tts_model="text-to-speech-standard",
+                tts_voice=voice_name
+            )
         )
-        # --- FIM DA CORREÇÃO ---
+        # --- FIM DA CORREÇÃO FINAL ---
+        
+        # A resposta de áudio agora está no primeiro candidato
+        if not (response.candidates and response.candidates[0].content.parts):
+             return jsonify({"error": "Não foi possível gerar o áudio. A resposta da API estava vazia."}), 500
 
-        if not response.audio_content:
-            return jsonify({"error": "Não foi possível gerar o áudio. O texto pode ser inválido ou a API está indisponível."}), 500
-
-        wav_data = response.audio_content
+        audio_part = response.candidates[0].content.parts[0]
+        wav_data = audio_part.inline_data.data
         
         http_response = make_response(send_file(
             io.BytesIO(wav_data),
