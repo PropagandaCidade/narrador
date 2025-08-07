@@ -1,17 +1,15 @@
 # app.py - VERSÃO FINAL E DEFINITIVA
 import os
 import io
-import struct
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
 
-# Importações corretas para a API do Gemini
+# Importação correta e única necessária
 import google.generativeai as genai
-from google.generativeai import types
 
 app = Flask(__name__)
 
-# Configuração de CORS que já está funcionando
+# Configuração de CORS que já sabemos que funciona
 CORS(app) 
 
 @app.route('/')
@@ -21,11 +19,15 @@ def home():
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
-    """Endpoint principal que gera o áudio usando o método de baixo nível oficial."""
+    """Endpoint principal que gera o áudio usando o método de alto nível."""
+    
+    # 1. Obter a chave da API das variáveis de ambiente do Railway
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        return jsonify({"error": "Chave de API do servidor não configurada."}), 500
+        print("ERRO CRÍTICO: A variável de ambiente GEMINI_API_KEY não foi encontrada.")
+        return jsonify({"error": "Configuração do servidor incompleta: Chave de API ausente."}), 500
 
+    # 2. Obter e validar os dados da requisição JSON
     data = request.get_json()
     if not data:
         return jsonify({"error": "Requisição inválida, corpo JSON ausente."}), 400
@@ -37,35 +39,24 @@ def generate_audio_endpoint():
         return jsonify({"error": "Os campos 'text' e 'voice' são obrigatórios."}), 400
 
     try:
+        # 3. Configura a API
         genai.configure(api_key=api_key)
         
-        tts_model = genai.GenerativeModel(model_name='models/text-to-speech')
-
         print(f"Gerando áudio para: '{text_to_narrate[:50]}...' com voz: '{voice_name}'")
 
-        # --- A CORREÇÃO FINAL ESTÁ AQUI ---
-        # A API espera uma string "audio", não uma constante.
-        generation_config = types.GenerateContentConfig(
-            response_modalities=["audio"], # <-- ESTA É A LINHA CORRIGIDA
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name=voice_name
-                    )
-                )
-            )
+        # 4. A função 'text_to_speech' é a forma mais direta e recomendada
+        response = genai.text_to_speech(
+            text=text_to_narrate,
+            voice=voice_name,
+            model='models/text-to-speech'
         )
         
-        response = tts_model.generate_content(
-            contents=[text_to_narrate],
-            config=generation_config
-        )
+        # 5. Verifica se a resposta contém o áudio
+        if not response.audio_content:
+            return jsonify({"error": "Não foi possível gerar o áudio. A resposta da API veio vazia."}), 500
         
-        audio_part = response.candidates[0].content.parts[0]
-        wav_data = audio_part.inline_data.data
-        
-        if not wav_data:
-            return jsonify({"error": "Não foi possível gerar o áudio."}), 500
+        # 6. Prepara o áudio para ser enviado como resposta
+        wav_data = response.audio_content
         
         http_response = make_response(send_file(
             io.BytesIO(wav_data),
@@ -78,11 +69,11 @@ def generate_audio_endpoint():
         return http_response
 
     except Exception as e:
-        # Captura e retorna qualquer erro vindo da API do Google
+        # Captura qualquer erro que ocorra na comunicação com a API do Google
         error_message = f"Erro ao contatar a API do Google Gemini: {e}"
         print(f"ERRO CRÍTICO NA API: {error_message}")
         return jsonify({"error": error_message}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, debug=False)
