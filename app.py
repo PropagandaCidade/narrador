@@ -1,4 +1,4 @@
-# app.py - VERSÃO FINAL E DEFINITIVA
+# app.py - VERSÃO FINAL E CORRIGIDA
 import os
 import io
 from flask import Flask, request, jsonify, send_file, make_response
@@ -36,37 +36,36 @@ def generate_audio_endpoint():
         return jsonify({"error": "Os campos 'text' e 'voice' são obrigatórios."}), 400
 
     try:
-        # 1. Configura a API (método moderno)
         genai.configure(api_key=api_key)
         
-        # 2. Define o modelo TTS correto
         tts_model = genai.GenerativeModel(model_name='models/text-to-speech')
 
         print(f"Gerando áudio para: '{text_to_narrate[:50]}...' com voz: '{voice_name}'")
 
-        # 3. Gera a resposta usando a estrutura oficial e completa
-        response = tts_model.generate_content(
-            contents=[text_to_narrate],
-            generation_config=types.GenerationConfig(
-                response_modalities=[types.GenerateContentResponse.AUDIO],
-                speech_config=types.SpeechConfig(
-                    voice_config=types.VoiceConfig(
-                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                            voice_name=voice_name
-                        )
+        # --- A CORREÇÃO FINAL ESTÁ AQUI ---
+        # A API espera uma string "audio", não uma constante.
+        generation_config = types.GenerateContentConfig(
+            response_modalities=["audio"], # <-- ESTA É A LINHA CORRIGIDA
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name=voice_name
                     )
                 )
             )
         )
         
-        # 4. Extrai os dados de áudio da resposta
+        response = tts_model.generate_content(
+            contents=[text_to_narrate],
+            config=generation_config
+        )
+        
         audio_part = response.candidates[0].content.parts[0]
         wav_data = audio_part.inline_data.data
         
         if not wav_data:
             return jsonify({"error": "Não foi possível gerar o áudio."}), 500
         
-        # 5. Prepara e envia o arquivo de áudio como resposta
         http_response = make_response(send_file(
             io.BytesIO(wav_data),
             mimetype='audio/wav',
@@ -78,11 +77,10 @@ def generate_audio_endpoint():
         return http_response
 
     except Exception as e:
-        # Captura e retorna qualquer erro vindo da API do Google
         error_message = f"Erro ao contatar a API do Google Gemini: {e}"
         print(f"ERRO CRÍTICO NA API: {error_message}")
         return jsonify({"error": error_message}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port)
