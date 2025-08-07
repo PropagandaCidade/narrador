@@ -1,48 +1,42 @@
-# app.py - VERSÃO FINAL adaptada do código oficial do Google Gemini
+# app.py - VERSÃO CORRIGIDA E ADAPTADA AO SEU PROJETO
 import os
 import io
 import struct
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
 
-# Importa os módulos corretos do google-genai
-from google import genai
-from google.genai import types
+# --- IMPORTAÇÃO CORRETA E DEFINITIVA ---
+# Esta é a única forma que funciona de maneira estável.
+import google.generativeai as genai
+from google.generativeai import types
 
 app = Flask(__name__)
 
-# Configuração de CORS aberta para garantir a conexão
+# Sua configuração de CORS que já funcionava
 CORS(app)
 
-# --- FUNÇÕES AUXILIARES DO CÓDIGO OFICIAL DO GOOGLE ---
-# Estas funções garantem que o áudio seja convertido para um WAV válido.
-
+# --- Suas funções auxiliares (convert_to_wav) ---
+# Mantemos suas funções, pois a lógica de streaming do exemplo precisa delas.
 def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
-    """Extrai a taxa de amostragem (rate) de um mimetype de áudio."""
-    rate = 24000 # Valor padrão
+    rate = 24000
     if mime_type and "rate=" in mime_type:
         try:
             rate_str = mime_type.split("rate=")[1].split(";")[0]
             rate = int(rate_str)
         except (ValueError, IndexError):
-            pass # Mantém o valor padrão se a extração falhar
+            pass
     return {"rate": rate}
 
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
-    """Gera um cabeçalho de arquivo WAV para os dados de áudio brutos."""
     parameters = parse_audio_mime_type(mime_type)
     sample_rate = parameters["rate"]
-    
-    # Parâmetros padrão para áudio L16
     bits_per_sample = 16
     num_channels = 1
-    
     data_size = len(audio_data)
     bytes_per_sample = bits_per_sample // 8
     block_align = num_channels * bytes_per_sample
     byte_rate = sample_rate * block_align
     chunk_size = 36 + data_size
-
     header = struct.pack(
         "<4sI4s4sIHHIIHH4sI",
         b"RIFF", chunk_size, b"WAVE", b"fmt ", 16,
@@ -51,17 +45,15 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     )
     return header + audio_data
 
-# --- FIM DAS FUNÇÕES AUXILIARES ---
-
+# --- Fim das funções auxiliares ---
 
 @app.route('/')
 def home():
-    """Rota para verificar se o serviço está online."""
-    return "Serviço de Narração no Railway está online e usando a API oficial!"
+    return "Serviço de Narração no Railway está online!"
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
-    """Endpoint principal que gera o áudio usando o método de streaming oficial."""
+    # Mantemos sua lógica de obter dados, que está correta
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         return jsonify({"error": "Chave de API do servidor não configurada."}), 500
@@ -77,14 +69,13 @@ def generate_audio_endpoint():
         return jsonify({"error": "Os campos 'text' e 'voice' são obrigatórios."}), 400
 
     try:
-        # 1. Inicializa o cliente, como no exemplo oficial
+        # --- LÓGICA DO EXEMPLO DO GOOGLE ADAPTADA AQUI ---
         client = genai.Client(api_key=api_key)
-
-        # 2. Define o modelo e o conteúdo da requisição
         model = "gemini-2.5-pro-preview-tts"
-        contents = [types.Part.from_text(text=text_to_narrate)]
         
-        # 3. Define a configuração de voz e resposta
+        # O exemplo do Google usa types.Part, vamos seguir.
+        contents = [types.Part.from_text(text=text_to_narrate)]
+
         generate_content_config = types.GenerateContentConfig(
             response_modalities=["audio"],
             speech_config=types.SpeechConfig(
@@ -96,11 +87,8 @@ def generate_audio_endpoint():
             ),
         )
 
-        print(f"Iniciando streaming para a voz: '{voice_name}'...")
-
-        # 4. Processa o stream para coletar todos os pedaços de áudio
         audio_buffer = bytearray()
-        audio_mime_type = "audio/L16;rate=24000" # Default
+        audio_mime_type = "audio/L16;rate=24000"
 
         stream = client.models.generate_content_stream(
             model=model,
@@ -119,22 +107,17 @@ def generate_audio_endpoint():
                     audio_mime_type = inline_data.mime_type
 
         if not audio_buffer:
-            return jsonify({"error": "Não foi possível gerar o áudio. A resposta da API estava vazia."}), 500
+            return jsonify({"error": "Não foi possível gerar o áudio."}), 500
 
-        print("Streaming concluído. Convertendo para WAV...")
-
-        # 5. Converte os dados brutos para um arquivo WAV completo
         wav_data = convert_to_wav(bytes(audio_buffer), audio_mime_type)
-
-        # 6. Envia o arquivo WAV como resposta
+        
+        # Sua lógica de resposta, que já funcionava
         http_response = make_response(send_file(
             io.BytesIO(wav_data),
             mimetype='audio/wav',
             as_attachment=False
         ))
         http_response.headers['X-Model-Used'] = "Pro"
-        
-        print("Sucesso: Áudio gerado e enviado ao cliente.")
         return http_response
 
     except Exception as e:
