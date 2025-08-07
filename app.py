@@ -3,13 +3,16 @@ import os
 import io
 import struct
 from flask import Flask, request, jsonify, send_file, make_response
-from flask_cors import CORS
+from flask_cors import CORS # Importe CORS
 from google import genai
 from google.genai import types
 
 app = Flask(__name__)
-# Configura CORS
-CORS(app, origins="*", expose_headers=['X-Model-Used'])
+
+# --- CONFIGURAÇÃO DE CORS AJUSTADA ---
+# Permite requisições especificamente do seu domínio frontend
+CORS(app, resources={r"/api/*": {"origins": "https://propagandacidadeaudio.com.br"}}, expose_headers=['X-Model-Used'])
+# --- FIM DA CONFIGURAÇÃO DE CORS ---
 
 # Função convert_to_wav (como fornecida anteriormente)
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
@@ -44,8 +47,7 @@ def generate_audio_endpoint():
     # A checagem de api_key foi removida pois a variável de ambiente já é configurada no Railway.
 
     data = request.get_json()
-    # ADICIONADO: Imprime os dados recebidos para depuração. Verifique estes logs no Railway.
-    print(f"Dados recebidos do frontend: {data}")
+    print(f"Dados recebidos do frontend: {data}") # Log para depuração
 
     if data is None: # Valida se o corpo JSON foi recebido corretamente
         return jsonify({"error": "Requisição inválida, corpo JSON ausente."}), 400
