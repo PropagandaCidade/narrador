@@ -58,6 +58,11 @@ def generate_audio_endpoint():
         return jsonify({"error": "O campo 'voice' não pode estar vazio."}), 400
 
     try:
+        # Para testar se a rota está funcionando sem chamar a API do Google Gemini:
+        # Você pode descomentar as linhas de teste abaixo e comentar as linhas
+        # que chamam o genai.Client, e depois reverter as alterações.
+
+        # print("Teste: API Key obtida, chamando Google Gemini...") # Descomente para debug
         client = genai.Client(api_key=api_key)
         model = "gemini-2.5-pro-preview-tts"
 
@@ -79,6 +84,8 @@ def generate_audio_endpoint():
         audio_buffer = bytearray()
         audio_mime_type = "audio/L16;rate=24000"
 
+        # Esta chamada pode demorar e ser a causa do timeout (502) se a API do Google Gemini
+        # demorar muito para responder ou se a chave API não estiver completamente ativa.
         stream = client.models.generate_content_stream(model=model, contents=contents, config=generate_content_config)
 
         for chunk in stream:
@@ -101,10 +108,12 @@ def generate_audio_endpoint():
         return response
 
     except Exception as e:
-        print(f"Ocorreu um erro na API: {e}")
+        # Se ocorrer um erro durante a chamada da API do Google Gemini ou processamento:
+        print(f"Ocorreu um erro na API: {e}") # Imprime o erro nos logs do Railway
         return jsonify({"error": f"Erro ao contatar a API do Google Gemini: {e}"}), 500
 
 if __name__ == '__main__':
     # Para execução local com `python app.py`
+    # O Railway irá configurar a porta via variável de ambiente PORT
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
