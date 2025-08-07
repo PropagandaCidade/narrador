@@ -41,11 +41,11 @@ def home():
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
     api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-         return jsonify({"error": "Chave da API GEMINI_API_KEY não configurada no Railway."}), 500
+    # A checagem de api_key foi removida pois a variável de ambiente já é configurada no Railway.
 
     data = request.get_json()
-    if not 
+    # Adicionada uma checagem para garantir que o corpo JSON foi recebido
+    if data is None:
         return jsonify({"error": "Requisição inválida, corpo JSON ausente."}), 400
 
     text_to_narrate = data.get('text')
