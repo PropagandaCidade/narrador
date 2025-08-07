@@ -1,6 +1,4 @@
-flask
-flask-cors
-python-dotenv
-google-genai
-pydub
+Flask
+Flask-Cors
+google-generativeai
 gunicorn
