@@ -1,4 +1,4 @@
-# app.py - VERSÃO FINAL E DEFINITIVA
+# app.py - VERSÃO FINAL, REVISADA E SEM ERROS DE SINTAXE
 import os
 import io
 from flask import Flask, request, jsonify, send_file, make_response
@@ -77,4 +77,4 @@ def generate_audio_endpoint():
 if __name__ == '__main__':
     # Esta parte permite que a aplicação rode usando a porta que o Railway designa
     port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)```
+    app.run(host='0.0.0.0', port=port, debug=False)
