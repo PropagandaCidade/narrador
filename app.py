@@ -1,25 +1,57 @@
-# app.py - VERSÃO FINAL E DEFINITIVA (COM LOGGING APERFEIÇOADO)
+# app.py - VERSÃO CORRIGIDA PARA google-genai E gemini-2.5-pro-preview-tts
 import os
 import io
+import mimetypes
+import struct
 import logging
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
-# Importação correta e única necessária
-import google.generativeai as genai
 
-# --- Configuração de logging para facilitar o debug ---
+# Importações da nova biblioteca
+from google import genai
+from google.genai import types
+
+# --- Configuração de logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-# Configuração de CORS que já sabemos que funciona
-CORS(app) 
+CORS(app)
+
+def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
+    """
+    Gera um cabeçalho WAV para os dados de áudio recebidos.
+    Código copiado/adaptado do exemplo do Google.
+    """
+    logger.info(f"Convertendo dados de áudio de {mime_type} para WAV...")
+    
+    # Valores padrão, podem ser ajustados conforme o mime_type
+    bits_per_sample = 16
+    sample_rate = 24000 
+    # Tenta parsear o mime_type para valores reais (opcional, mas ideal)
+    # O exemplo do Google faz isso, mas para simplificar, podemos usar padrões razoáveis.
+    # Se quiser implementar o parse completo, use a função do exemplo.
+
+    num_channels = 1
+    data_size = len(audio_data)
+    bytes_per_sample = bits_per_sample // 8
+    block_align = num_channels * bytes_per_sample
+    byte_rate = sample_rate * block_align
+    chunk_size = 36 + data_size
+
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF", chunk_size, b"WAVE", b"fmt ", 16, 1, num_channels,
+        sample_rate, byte_rate, block_align, bits_per_sample, b"data", data_size
+    )
+    logger.info("Conversão para WAV concluída.")
+    return header + audio_data
 
 @app.route('/')
 def home():
     """Rota para verificar se o serviço está online."""
     logger.info("Endpoint '/' acessado.")
-    return "Serviço de Narração no Railway está online e estável!"
+    return "Serviço de Narração no Railway está online e estável! (Usando google-genai)"
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -49,45 +81,90 @@ def generate_audio_endpoint():
         return jsonify({"error": error_msg}), 400
 
     try:
-        # 3. Configurar a API
-        logger.info("Configurando a API do Google Generative AI...")
-        genai.configure(api_key=api_key)
-        
-        logger.info(f"Gerando áudio para: '{text_to_narrate[:50]}...' com voz: '{voice_name}' usando o modelo 'gemini-2.5-pro-preview-tts'")
-        
-        # --- A CORREÇÃO FINAL ESTÁ AQUI ---
-        # Usamos a função simples 'text_to_speech' e especificamos
-        # o modelo exato. O 'voice' é passado diretamente para a função.
-        response = genai.text_to_speech(
-            text=text_to_narrate,
-            voice=voice_name, # Parâmetro correto para especificar a voz
-            model='gemini-2.5-pro-preview-tts' # Modelo TTS de pré-visualização
-        )
-        # --- FIM DA CORREÇÃO ---
-        
-        # 4. Extrair e verificar os dados de áudio
-        wav_data = response.audio_content
-        if not wav_data:
-            error_msg = "Não foi possível gerar o áudio. A resposta da API veio vazia."
-            logger.error(error_msg)
-            return jsonify({"error": error_msg}), 500
+        # 3. Configurar o cliente da API
+        logger.info("Configurando o cliente Google GenAI...")
+        client = genai.Client(api_key=api_key)
 
-        # 5. Preparar e enviar a resposta de sucesso
-        logger.info("Áudio gerado com sucesso. Enviando resposta...")
+        model_name = "gemini-2.5-pro-preview-tts"
+        logger.info(f"Usando o modelo: {model_name}")
+
+        # 4. Preparar o conteúdo e a configuração
+        contents = [
+            types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=text_to_narrate)]
+            )
+        ]
+
+        generate_content_config = types.GenerateContentConfig(
+            # Outros parâmetros podem ser adicionados aqui
+            # temperature=1.0, 
+            response_modalities=["audio"], # Especifica que queremos áudio
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name=voice_name # Especifica a voz
+                    )
+                )
+            )
+        )
+        logger.info(f"Configuração de geração criada para voz: '{voice_name}'")
+
+        # 5. Fazer a chamada à API (streaming)
+        logger.info("Iniciando chamada à API generate_content_stream...")
+        audio_data_chunks = []
+        for chunk in client.models.generate_content_stream(
+            model=model_name,
+            contents=contents,
+            config=generate_content_config
+        ):
+            # Verifica se o chunk contém dados de áudio
+            if (chunk.candidates and 
+                chunk.candidates[0].content and 
+                chunk.candidates[0].content.parts and
+                chunk.candidates[0].content.parts[0].inline_data and 
+                chunk.candidates[0].content.parts[0].inline_data.data):
+                
+                inline_data = chunk.candidates[0].content.parts[0].inline_data
+                audio_data_chunks.append(inline_data.data)
+                logger.debug(f"Recebido chunk de áudio de {len(inline_data.data)} bytes")
+
+        # 6. Processar os dados recebidos
+        if not audio_data_chunks:
+             error_msg = "A API respondeu, mas não retornou dados de áudio."
+             logger.error(error_msg)
+             return jsonify({"error": error_msg}), 500
+
+        full_audio_data = b''.join(audio_data_chunks)
+        logger.info(f"Dados de áudio completos recebidos ({len(full_audio_data)} bytes).")
+
+        # 7. Converter para WAV se necessário
+        # Assumindo que os dados venham em um formato que precise de cabeçalho WAV
+        # O exemplo do Google converte, então vamos fazer o mesmo para garantir compatibilidade.
+        mime_type = inline_data.mime_type if 'inline_data' in locals() else "audio/unknown"
+        logger.info(f"Tipo MIME do áudio recebido: {mime_type}")
+        
+        # Se não for WAV, converte. (Ou sempre converte, por segurança)
+        # A verificação exata do mime_type pode ser feita aqui.
+        # Para simplificar, vamos converter sempre.
+        wav_data = convert_to_wav(full_audio_data, mime_type)
+        
+        # 8. Preparar e enviar a resposta de sucesso
+        logger.info("Áudio gerado e convertido com sucesso. Enviando resposta...")
         http_response = make_response(send_file(
             io.BytesIO(wav_data),
             mimetype='audio/wav',
             as_attachment=False
         ))
-        # Adicionando cabeçalho personalizado para identificar o modelo usado
-        http_response.headers['X-Model-Used'] = "gemini-2.5-pro-preview-tts"
-        logger.info("Sucesso: Áudio gerado e enviado ao cliente.")
+        http_response.headers['X-Model-Used'] = model_name
+        http_response.headers['X-Audio-Source-Mime'] = mime_type
+        logger.info("Sucesso: Áudio WAV gerado e enviado ao cliente.")
         return http_response
 
     except Exception as e:
         # Captura qualquer erro que ocorra na comunicação com a API do Google
-        error_message = f"Erro ao contatar a API do Google Gemini: {e}"
-        logger.error(f"ERRO CRÍTICO NA API: {error_message}", exc_info=True) # exc_info=True para log detalhado
+        error_message = f"Erro ao contatar a API do Google GenAI: {e}"
+        logger.error(f"ERRO CRÍTICO NA API: {error_message}", exc_info=True)
         return jsonify({"error": error_message}), 500
 
 if __name__ == '__main__':
