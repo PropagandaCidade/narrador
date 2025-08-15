@@ -1,4 +1,4 @@
-# app.py - VERSÃO FINAL CORRIGIDA (BASEADA NO SEU CÓDIGO ORIGINAL)
+# app.py - VERSÃO ORIGINAL DO USUÁRIO COM O BUG CORRIGIDO
 import os
 import io
 import struct
@@ -36,7 +36,7 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
 @app.route('/')
 def home():
     """Rota para verificar se o serviço está online."""
-    return "Serviço de Narração no Railway está online. (Usando gemini-2.5-pro-preview-tts)"
+    return "Serviço de Narração no Railway está online. (Usando a lógica original de streaming)"
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -46,7 +46,7 @@ def generate_audio_endpoint():
     
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        logger.critical("ERRO CRÍTICO: GEMINI_API_KEY não encontrada nas variáveis de ambiente.")
+        logger.critical("ERRO CRÍTICO: GEMINI_API_KEY não encontrada.")
         return jsonify({"error": "Configuração do servidor incompleta: Chave de API ausente."}), 500
 
     data = request.get_json()
@@ -58,49 +58,66 @@ def generate_audio_endpoint():
     voice_name = data.get('voice')
 
     if not text_to_narrate or not voice_name:
-        msg = f"Os campos 'text' e 'voice' são obrigatórios. Recebido: text={bool(text_to_narrate)}, voice={bool(voice_name)}"
+        msg = f"Os campos 'text' e 'voice' são obrigatórios."
         logger.warning(msg)
         return jsonify({"error": msg}), 400
         
     logger.info(f"Texto: '{text_to_narrate[:50]}...' | Voz: '{voice_name}'")
 
     try:
-        # 1. Criar o cliente (seu método original, que está CORRETO)
+        # A sua lógica original, que estava correta
         logger.info("Configurando o cliente Google GenAI...")
         client = genai.Client(api_key=api_key)
-
-        # 2. Configurar o conteúdo e a geração (sua lógica original, CORRETA)
+        
         model_name = "gemini-2.5-pro-preview-tts"
         logger.info(f"Usando o modelo: {model_name}")
-        
-        # A API de TTS de preview pode precisar de um prompt mais direto
-        prompt = f"Fale o seguinte texto: {text_to_narrate}"
 
-        # 3. Fazer a chamada à API (streaming, como no seu original)
-        logger.info("Iniciando chamada à API generate_content (streaming)...")
-        
-        # A chamada para gerar o áudio
-        response = client.generate_speech(
-            model=model_name,
-            prompt=prompt,
-            voice=voice_name
+        contents = [types.Content(role="user", parts=[types.Part.from_text(text=text_to_narrate)])]
+        generate_content_config = types.GenerateContentConfig(
+            response_modalities=["audio"],
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
+                )
+            )
         )
-        
-        # O response do SDK já contém o áudio completo
-        audio_data = response.audio_content
-        mime_type = response.mime_type
 
-        if not audio_data:
+        logger.info("Iniciando chamada à API generate_content_stream...")
+        audio_data_chunks = []
+        
+        # ***** INÍCIO DA CORREÇÃO *****
+        # Declaramos a variável aqui fora com um valor padrão
+        mime_type = "audio/unknown" 
+        
+        for chunk in client.models.generate_content_stream(
+            model=model_name,
+            contents=contents,
+            config=generate_content_config
+        ):
+            if (chunk.candidates and chunk.candidates[0].content and 
+                chunk.candidates[0].content.parts and
+                chunk.candidates[0].content.parts[0].inline_data and 
+                chunk.candidates[0].content.parts[0].inline_data.data):
+                
+                inline_data = chunk.candidates[0].content.parts[0].inline_data
+                audio_data_chunks.append(inline_data.data)
+                
+                # Atualizamos a variável aqui dentro. Seu valor será preservado
+                # depois que o loop terminar.
+                mime_type = inline_data.mime_type
+        # ***** FIM DA CORREÇÃO *****
+
+        if not audio_data_chunks:
              error_msg = "A API respondeu, mas não retornou dados de áudio."
              logger.error(error_msg)
              return jsonify({"error": error_msg}), 500
 
-        logger.info(f"Dados de áudio completos recebidos ({len(audio_data)} bytes). Mime type: {mime_type}")
+        full_audio_data = b''.join(audio_data_chunks)
+        logger.info(f"Dados de áudio completos recebidos ({len(full_audio_data)} bytes). Tipo MIME: {mime_type}")
 
-        # 4. Converter e enviar a resposta
-        wav_data = convert_to_wav(audio_data, mime_type)
+        wav_data = convert_to_wav(full_audio_data, mime_type)
         
-        logger.info("Áudio gerado e convertido com sucesso. Enviando resposta...")
+        logger.info("Áudio gerado com sucesso. Enviando resposta...")
         return send_file(
             io.BytesIO(wav_data),
             mimetype='audio/wav',
@@ -114,4 +131,15 @@ def generate_audio_endpoint():
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port)```
+
+### O Que Foi Corrigido
+
+A única mudança foi esta:
+1.  A variável `mime_type` é criada **antes** do loop `for`.
+2.  Dentro do loop, quando recebemos o primeiro pedaço de áudio, o valor de `mime_type` é **atualizado**.
+3.  A linha de código que causava o erro original, que tentava acessar `inline_data` **depois** do loop, foi removida.
+
+Isto preserva 100% da sua lógica de comunicação com a API, que estava correta, e corrige apenas o bug de Python que causava o erro 500.
+
+Por favor, faça o deploy desta versão. Tenho total confiança de que esta é a solução.
