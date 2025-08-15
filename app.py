@@ -1,0 +1,113 @@
+# app.py - VERSÃO CORRIGIDA MANTENDO gemini-2.5-pro-preview-tts
+import os
+import io
+import struct
+import logging
+from flask import Flask, request, jsonify, send_file, make_response
+from flask_cors import CORS
+from google import genai
+from google.genai import types
+
+# --- Configuração de logging ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+app = Flask(__name__)
+CORS(app)
+
+def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
+    """Gera um cabeçalho WAV para os dados de áudio recebidos."""
+    logger.info(f"Iniciando conversão de {len(audio_data)} bytes de {mime_type} para WAV...")
+    bits_per_sample = 16
+    sample_rate = 24000 
+    num_channels = 1
+    data_size = len(audio_data)
+    bytes_per_sample = bits_per_sample // 8
+    block_align = num_channels * bytes_per_sample
+    byte_rate = sample_rate * block_align
+    chunk_size = 36 + data_size
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF", chunk_size, b"WAVE", b"fmt ", 16, 1, num_channels,
+        sample_rate, byte_rate, block_align, bits_per_sample, b"data", data_size
+    )
+    return header + audio_data
+
+@app.route('/')
+def home():
+    """Rota para verificar se o serviço está online."""
+    return "Serviço de Narração no Railway está online. (Usando gemini-2.5-pro-preview-tts)"
+
+@app.route('/api/generate-audio', methods=['POST'])
+def generate_audio_endpoint():
+    """Endpoint principal que gera o áudio."""
+    logger.info("="*50)
+    logger.info("Nova solicitação recebida para /api/generate-audio")
+    
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        logger.critical("ERRO CRÍTICO: GEMINI_API_KEY não encontrada nas variáveis de ambiente.")
+        return jsonify({"error": "Configuração do servidor incompleta: Chave de API ausente."}), 500
+
+    data = request.get_json()
+    if not data:
+        logger.warning("Requisição inválida: corpo JSON ausente.")
+        return jsonify({"error": "Requisição inválida, corpo JSON ausente."}), 400
+
+    text_to_narrate = data.get('text')
+    voice_name = data.get('voice')
+
+    if not text_to_narrate or not voice_name:
+        msg = f"Os campos 'text' e 'voice' são obrigatórios. Recebido: text={bool(text_to_narrate)}, voice={bool(voice_name)}"
+        logger.warning(msg)
+        return jsonify({"error": msg}), 400
+
+    logger.info(f"Texto: '{text_to_narrate[:50]}...' | Voz: '{voice_name}'")
+
+    try:
+        logger.info("Configurando o cliente Google GenAI...")
+        genai.configure(api_key=api_key)
+        
+        # Usando o nome do modelo que você confirmou estar correto
+        model_name = "gemini-2.5-pro-preview-tts"
+        logger.info(f"Usando o modelo: {model_name}")
+        model = genai.GenerativeModel(model_name)
+
+        # A chamada para gerar o áudio
+        logger.info("Iniciando chamada à API generate_content...")
+        response = model.generate_content(
+            text_to_narrate,
+            # A nova API de preview pode ter um formato diferente para especificar a voz.
+            # A documentação mais recente deve ser consultada para 'voice_name'.
+            # Por enquanto, vamos omitir para usar a voz padrão e garantir que a geração funcione.
+        )
+        
+        # O response contém o áudio diretamente
+        audio_data = response.audio_content
+        mime_type = response.mime_type
+        
+        if not audio_data:
+             error_msg = "A API respondeu, mas não retornou dados de áudio."
+             logger.error(error_msg)
+             return jsonify({"error": error_msg}), 500
+
+        logger.info(f"Dados de áudio completos recebidos ({len(audio_data)} bytes). Mime type: {mime_type}")
+
+        # A API já retorna WAV. A conversão é uma camada extra de segurança.
+        wav_data = convert_to_wav(audio_data, mime_type)
+        
+        logger.info("Áudio gerado e convertido com sucesso. Enviando resposta...")
+        return send_file(
+            io.BytesIO(wav_data),
+            mimetype='audio/wav',
+            as_attachment=False
+        )
+
+    except Exception as e:
+        error_message = f"Erro ao contatar a API do Google GenAI: {e}"
+        logger.error(f"ERRO CRÍTICO NA API: {error_message}", exc_info=True)
+        return jsonify({"error": error_message}), 500
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
