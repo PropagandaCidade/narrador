@@ -1,8 +1,9 @@
-# app.py - VERSÃO COMPLETA E FINAL
+# app.py - VERSÃO FINAL COM PRÉ-PROCESSAMENTO DE NÚMEROS
 import os
 import io
 import struct
 import logging
+import re  # Importa a biblioteca de expressões regulares
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
 from google import genai
@@ -15,8 +16,34 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
+# ***** NOVA FUNÇÃO DE PRÉ-PROCESSAMENTO *****
+def normalizar_numeros(texto: str) -> str:
+    """Converte números escritos por extenso em dígitos para evitar filtros da API."""
+    numeros_por_extenso = {
+        'zero': '0', 'um': '1', 'uma': '1', 'dois': '2', 'duas': '2', 'três': '3', 
+        'quatro': '4', 'cinco': '5', 'seis': '6', 'sete': '7', 'oito': '8', 'nove': '9',
+        'dez': '10', 'onze': '11', 'doze': '12', 'treze': '13', 'catorze': '14', 'quinze': '15',
+        'dezesseis': '16', 'dezessete': '17', 'dezoito': '18', 'dezenove': '19',
+        'vinte': '20', 'trinta': '30', 'quarenta': '40', 'cinquenta': '50',
+        'sessenta': '60', 'setenta': '70', 'oitenta': '80', 'noventa': '90',
+        'cem': '100', 'cento': '100', 'duzentos': '200', 'trezentos': '300',
+        'quatrocentos': '400', 'quinhentos': '500', 'seiscentos': '600',
+        'setecentos': '700', 'oitocentos': '800', 'novecentos': '900', 'mil': '1000'
+    }
+    
+    texto_normalizado = texto
+    # Usamos expressões regulares para substituir apenas palavras inteiras, ignorando maiúsculas/minúsculas
+    for palavra, digito in numeros_por_extenso.items():
+        texto_normalizado = re.sub(r'\b' + palavra + r'\b', digito, texto_normalizado, flags=re.IGNORECASE)
+    
+    if texto_normalizado != texto:
+        logger.info(f"Texto normalizado de '{texto}' para '{texto_normalizado}'")
+        
+    return texto_normalizado
+
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     """Gera um cabeçalho WAV para os dados de áudio recebidos."""
+    # (Esta função permanece inalterada)
     logger.info(f"Iniciando conversão de {len(audio_data)} bytes de {mime_type} para WAV...")
     bits_per_sample = 16
     sample_rate = 24000 
@@ -62,10 +89,13 @@ def generate_audio_endpoint():
         logger.warning(msg)
         return jsonify({"error": msg}), 400
     
-    # Adicionando log detalhado da requisição para depuração de falhas intermitentes
-    logger.info(f"Tentando gerar áudio para a voz: '{voice_name}' com o texto: '{text_to_narrate[:100]}...'")
+    # ***** CHAMADA DA NOVA FUNÇÃO DE NORMALIZAÇÃO *****
+    text_to_narrate = normalizar_numeros(text_to_narrate)
+    
+    logger.info(f"Tentando gerar áudio para a voz: '{voice_name}' com o texto (após normalização): '{text_to_narrate[:100]}...'")
 
     try:
+        # (O resto da função permanece como na versão anterior)
         logger.info("Configurando o cliente Google GenAI...")
         client = genai.Client(api_key=api_key)
         
@@ -102,7 +132,7 @@ def generate_audio_endpoint():
 
         if not audio_data_chunks:
              error_msg = "A API respondeu, mas não retornou dados de áudio."
-             logger.error(f"Falha ao receber dados de áudio para a voz '{voice_name}' e texto '{text_to_narrate[:100]}...'. Isso pode ser uma falha intermitente do modelo de preview.")
+             logger.error(f"Falha ao receber dados de áudio para a voz '{voice_name}' e texto '{text_to_narrate[:100]}...'. Isso pode ser uma falha intermitente do modelo de preview ou um filtro de conteúdo.")
              return jsonify({"error": error_msg}), 500
 
         full_audio_data = b''.join(audio_data_chunks)
