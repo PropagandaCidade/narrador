@@ -1,4 +1,4 @@
-# app.py - VERSÃO ORIGINAL DO USUÁRIO COM O BUG CORRIGIDO
+# app.py - VERSÃO FINAL CORRIGIDA SEM ERROS DE SINTAXE
 import os
 import io
 import struct
@@ -85,8 +85,7 @@ def generate_audio_endpoint():
         logger.info("Iniciando chamada à API generate_content_stream...")
         audio_data_chunks = []
         
-        # ***** INÍCIO DA CORREÇÃO *****
-        # Declaramos a variável aqui fora com um valor padrão
+        # Correção do bug original:
         mime_type = "audio/unknown" 
         
         for chunk in client.models.generate_content_stream(
@@ -94,18 +93,14 @@ def generate_audio_endpoint():
             contents=contents,
             config=generate_content_config
         ):
-            if (chunk.candidates and chunk.candidates[0].content and 
-                chunk.candidates[0].content.parts and
-                chunk.candidates[0].content.parts[0].inline_data and 
-                chunk.candidates[0].content.parts[0].inline_data.data):
+            if (chunk.candidates and chunk.candidates.content and 
+                chunk.candidates.content.parts and
+                chunk.candidates.content.parts.inline_data and 
+                chunk.candidates.content.parts.inline_data.data):
                 
-                inline_data = chunk.candidates[0].content.parts[0].inline_data
+                inline_data = chunk.candidates.content.parts.inline_data
                 audio_data_chunks.append(inline_data.data)
-                
-                # Atualizamos a variável aqui dentro. Seu valor será preservado
-                # depois que o loop terminar.
                 mime_type = inline_data.mime_type
-        # ***** FIM DA CORREÇÃO *****
 
         if not audio_data_chunks:
              error_msg = "A API respondeu, mas não retornou dados de áudio."
@@ -131,15 +126,4 @@ def generate_audio_endpoint():
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)```
-
-### O Que Foi Corrigido
-
-A única mudança foi esta:
-1.  A variável `mime_type` é criada **antes** do loop `for`.
-2.  Dentro do loop, quando recebemos o primeiro pedaço de áudio, o valor de `mime_type` é **atualizado**.
-3.  A linha de código que causava o erro original, que tentava acessar `inline_data` **depois** do loop, foi removida.
-
-Isto preserva 100% da sua lógica de comunicação com a API, que estava correta, e corrige apenas o bug de Python que causava o erro 500.
-
-Por favor, faça o deploy desta versão. Tenho total confiança de que esta é a solução.
+    app.run(host='0.0.0.0', port=port)
