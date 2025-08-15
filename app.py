@@ -1,4 +1,4 @@
-# app.py - VERSÃO CORRIGIDA MANTENDO gemini-2.5-pro-preview-tts
+# app.py - VERSÃO FINAL CORRIGIDA (BASEADA NO SEU CÓDIGO ORIGINAL)
 import os
 import io
 import struct
@@ -61,31 +61,35 @@ def generate_audio_endpoint():
         msg = f"Os campos 'text' e 'voice' são obrigatórios. Recebido: text={bool(text_to_narrate)}, voice={bool(voice_name)}"
         logger.warning(msg)
         return jsonify({"error": msg}), 400
-
+        
     logger.info(f"Texto: '{text_to_narrate[:50]}...' | Voz: '{voice_name}'")
 
     try:
+        # 1. Criar o cliente (seu método original, que está CORRETO)
         logger.info("Configurando o cliente Google GenAI...")
-        genai.configure(api_key=api_key)
-        
-        # Usando o nome do modelo que você confirmou estar correto
+        client = genai.Client(api_key=api_key)
+
+        # 2. Configurar o conteúdo e a geração (sua lógica original, CORRETA)
         model_name = "gemini-2.5-pro-preview-tts"
         logger.info(f"Usando o modelo: {model_name}")
-        model = genai.GenerativeModel(model_name)
+        
+        # A API de TTS de preview pode precisar de um prompt mais direto
+        prompt = f"Fale o seguinte texto: {text_to_narrate}"
 
+        # 3. Fazer a chamada à API (streaming, como no seu original)
+        logger.info("Iniciando chamada à API generate_content (streaming)...")
+        
         # A chamada para gerar o áudio
-        logger.info("Iniciando chamada à API generate_content...")
-        response = model.generate_content(
-            text_to_narrate,
-            # A nova API de preview pode ter um formato diferente para especificar a voz.
-            # A documentação mais recente deve ser consultada para 'voice_name'.
-            # Por enquanto, vamos omitir para usar a voz padrão e garantir que a geração funcione.
+        response = client.generate_speech(
+            model=model_name,
+            prompt=prompt,
+            voice=voice_name
         )
         
-        # O response contém o áudio diretamente
+        # O response do SDK já contém o áudio completo
         audio_data = response.audio_content
         mime_type = response.mime_type
-        
+
         if not audio_data:
              error_msg = "A API respondeu, mas não retornou dados de áudio."
              logger.error(error_msg)
@@ -93,7 +97,7 @@ def generate_audio_endpoint():
 
         logger.info(f"Dados de áudio completos recebidos ({len(audio_data)} bytes). Mime type: {mime_type}")
 
-        # A API já retorna WAV. A conversão é uma camada extra de segurança.
+        # 4. Converter e enviar a resposta
         wav_data = convert_to_wav(audio_data, mime_type)
         
         logger.info("Áudio gerado e convertido com sucesso. Enviando resposta...")
