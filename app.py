@@ -1,4 +1,4 @@
-# app.py - VERSÃO DE DEPURAÇÃO PARA VERIFICAR A CHAVE
+# app.py - VERSÃO COMPLETA E FINAL
 import os
 import io
 import struct
@@ -16,7 +16,7 @@ app = Flask(__name__)
 CORS(app)
 
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
-    # ... (código da função convert_to_wav sem alterações) ...
+    """Gera um cabeçalho WAV para os dados de áudio recebidos."""
     logger.info(f"Iniciando conversão de {len(audio_data)} bytes de {mime_type} para WAV...")
     bits_per_sample = 16
     sample_rate = 24000 
@@ -35,26 +35,21 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
 
 @app.route('/')
 def home():
-    return "Serviço de Narração no Railway está online. (Modo de Depuração)"
+    """Rota para verificar se o serviço está online."""
+    return "Serviço de Narração no Railway está online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
+    """Endpoint principal que gera o áudio."""
     logger.info("="*50)
     logger.info("Nova solicitação recebida para /api/generate-audio")
     
-    # ***** INÍCIO DA ALTERAÇÃO PARA DEPURAÇÃO *****
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         logger.critical("FALHA NA LEITURA: Variável de ambiente GEMINI_API_KEY não encontrada.")
         return jsonify({"error": "Configuração do servidor incompleta: Chave de API ausente."}), 500
-    else:
-        # Log seguro para verificar se a chave foi carregada corretamente
-        key_preview = f"Início: {api_key[:5]}... Fim: {api_key[-5:]}"
-        logger.info(f"Variável GEMINI_API_KEY carregada com sucesso. Pré-visualização da chave: {key_preview}")
-    # ***** FIM DA ALTERAÇÃO PARA DEPURAÇÃO *****
-
+    
     data = request.get_json()
-    # ... (resto do código da função sem alterações) ...
     if not data:
         logger.warning("Requisição inválida: corpo JSON ausente.")
         return jsonify({"error": "Requisição inválida, corpo JSON ausente."}), 400
@@ -66,15 +61,15 @@ def generate_audio_endpoint():
         msg = f"Os campos 'text' e 'voice' são obrigatórios."
         logger.warning(msg)
         return jsonify({"error": msg}), 400
-        
-    logger.info(f"Texto: '{text_to_narrate[:50]}...' | Voz: '{voice_name}'")
+    
+    # Adicionando log detalhado da requisição para depuração de falhas intermitentes
+    logger.info(f"Tentando gerar áudio para a voz: '{voice_name}' com o texto: '{text_to_narrate[:100]}...'")
 
     try:
         logger.info("Configurando o cliente Google GenAI...")
         client = genai.Client(api_key=api_key)
         
         model_name = "gemini-2.5-pro-preview-tts"
-        # ... (resto do código try/except sem alterações) ...
         logger.info(f"Usando o modelo: {model_name}")
 
         contents = [types.Content(role="user", parts=[types.Part.from_text(text=text_to_narrate)])]
@@ -89,7 +84,6 @@ def generate_audio_endpoint():
 
         logger.info("Iniciando chamada à API generate_content_stream...")
         audio_data_chunks = []
-        
         mime_type = "audio/unknown" 
         
         for chunk in client.models.generate_content_stream(
@@ -108,7 +102,7 @@ def generate_audio_endpoint():
 
         if not audio_data_chunks:
              error_msg = "A API respondeu, mas não retornou dados de áudio."
-             logger.error(error_msg)
+             logger.error(f"Falha ao receber dados de áudio para a voz '{voice_name}' e texto '{text_to_narrate[:100]}...'. Isso pode ser uma falha intermitente do modelo de preview.")
              return jsonify({"error": error_msg}), 500
 
         full_audio_data = b''.join(audio_data_chunks)
