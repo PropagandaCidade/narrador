@@ -1,33 +1,22 @@
-# app.py - VERSÃO ESTÁVEL COM NORMALIZAÇÃO DE NÚMEROS
+# app.py - VERSÃO COMPLETA E FINAL
 import os
 import io
 import struct
 import logging
-import re
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
 from google import genai
 from google.genai import types
 
+# --- Configuração de logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
 app = Flask(__name__)
 CORS(app)
 
-def normalizar_numeros(texto: str) -> str:
-    """Converte números por extenso em dígitos para garantir a aprovação do filtro da API."""
-    numeros_por_extenso = {
-        'zero': '0', 'um': '1', 'uma': '1', 'dois': '2', 'duas': '2', 'três': '3', 
-        'quatro': '4', 'cinco': '5', 'seis': '6', 'sete': '7', 'oito': '8', 'nove': '9'
-    }
-    texto_normalizado = texto
-    for palavra, digito in numeros_por_extenso.items():
-        texto_normalizado = re.sub(r'\\b' + palavra + r'\\b', digito, texto_normalizado, flags=re.IGNORECASE)
-    if texto_normalizado != texto:
-        logger.info(f"Texto normalizado para dígitos: '{texto_normalizado}'")
-    return texto_normalizado
-
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
+    """Gera um cabeçalho WAV para os dados de áudio recebidos."""
     logger.info(f"Iniciando conversão de {len(audio_data)} bytes de {mime_type} para WAV...")
     bits_per_sample = 16
     sample_rate = 24000 
@@ -46,30 +35,44 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
 
 @app.route('/')
 def home():
+    """Rota para verificar se o serviço está online."""
     return "Serviço de Narração no Railway está online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
+    """Endpoint principal que gera o áudio."""
+    logger.info("="*50)
+    logger.info("Nova solicitação recebida para /api/generate-audio")
+    
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        return jsonify({"error": "Configuração do servidor incompleta."}), 500
+        logger.critical("FALHA NA LEITURA: Variável de ambiente GEMINI_API_KEY não encontrada.")
+        return jsonify({"error": "Configuração do servidor incompleta: Chave de API ausente."}), 500
     
     data = request.get_json()
-    if not data or not data.get('text') or not data.get('voice'):
-        return jsonify({"error": "Os campos 'text' e 'voice' são obrigatórios."}), 400
+    if not data:
+        logger.warning("Requisição inválida: corpo JSON ausente.")
+        return jsonify({"error": "Requisição inválida, corpo JSON ausente."}), 400
 
     text_to_narrate = data.get('text')
     voice_name = data.get('voice')
+
+    if not text_to_narrate or not voice_name:
+        msg = f"Os campos 'text' e 'voice' são obrigatórios."
+        logger.warning(msg)
+        return jsonify({"error": msg}), 400
     
-    # Aplica a normalização para garantir que a API não bloqueie
-    text_processado = normalizar_numeros(text_to_narrate)
-    
-    logger.info(f"Voz: '{voice_name}' | Texto Processado: '{text_processado[:100]}...'")
+    # Adicionando log detalhado da requisição para depuração de falhas intermitentes
+    logger.info(f"Tentando gerar áudio para a voz: '{voice_name}' com o texto: '{text_to_narrate[:100]}...'")
 
     try:
+        logger.info("Configurando o cliente Google GenAI...")
         client = genai.Client(api_key=api_key)
+        
         model_name = "gemini-2.5-pro-preview-tts"
-        contents = [types.Content(role="user", parts=[types.Part.from_text(text=text_processado)])]
+        logger.info(f"Usando o modelo: {model_name}")
+
+        contents = [types.Content(role="user", parts=[types.Part.from_text(text=text_to_narrate)])]
         generate_content_config = types.GenerateContentConfig(
             response_modalities=["audio"],
             speech_config=types.SpeechConfig(
@@ -78,23 +81,46 @@ def generate_audio_endpoint():
                 )
             )
         )
+
+        logger.info("Iniciando chamada à API generate_content_stream...")
         audio_data_chunks = []
-        mime_type = "audio/unknown"
-        for chunk in client.models.generate_content_stream(model=model_name, contents=contents, config=generate_content_config):
-            if (chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts and chunk.candidates[0].content.parts[0].inline_data and chunk.candidates[0].content.parts[0].inline_data.data):
+        mime_type = "audio/unknown" 
+        
+        for chunk in client.models.generate_content_stream(
+            model=model_name,
+            contents=contents,
+            config=generate_content_config
+        ):
+            if (chunk.candidates and chunk.candidates[0].content and 
+                chunk.candidates[0].content.parts and
+                chunk.candidates[0].content.parts[0].inline_data and 
+                chunk.candidates[0].content.parts[0].inline_data.data):
+                
                 inline_data = chunk.candidates[0].content.parts[0].inline_data
                 audio_data_chunks.append(inline_data.data)
                 mime_type = inline_data.mime_type
-        
+
         if not audio_data_chunks:
-             return jsonify({"error": "A API não retornou dados de áudio."}), 500
+             error_msg = "A API respondeu, mas não retornou dados de áudio."
+             logger.error(f"Falha ao receber dados de áudio para a voz '{voice_name}' e texto '{text_to_narrate[:100]}...'. Isso pode ser uma falha intermitente do modelo de preview.")
+             return jsonify({"error": error_msg}), 500
 
         full_audio_data = b''.join(audio_data_chunks)
+        logger.info(f"Dados de áudio completos recebidos ({len(full_audio_data)} bytes). Tipo MIME: {mime_type}")
+
         wav_data = convert_to_wav(full_audio_data, mime_type)
-        return send_file(io.BytesIO(wav_data), mimetype='audio/wav', as_attachment=False)
+        
+        logger.info("Áudio gerado com sucesso. Enviando resposta...")
+        return send_file(
+            io.BytesIO(wav_data),
+            mimetype='audio/wav',
+            as_attachment=False
+        )
 
     except Exception as e:
-        return jsonify({"error": f"Erro inesperado no servidor: {e}"}), 500
+        error_message = f"Erro ao contatar a API do Google GenAI: {e}"
+        logger.error(f"ERRO CRÍTICO NA API: {error_message}", exc_info=True)
+        return jsonify({"error": error_message}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
