@@ -1,13 +1,15 @@
-# app.py - VERSÃO FINAL COM CAMUFLAGEM INTERNA DE PALAVRAS E ALTERNÂNCIA DE MODELO
+# app.py - VERSÃO FINAL COM CONTROLE DE CONFIGURAÇÃO DE SEGURANÇA
 import os
 import io
 import struct
 import logging
-import re
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from google import genai
 from google.genai import types
+
+# Importa as classes necessárias para as configurações de segurança
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 # --- Configuração de logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -16,46 +18,9 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
-# ***** NOVA FUNÇÃO DE CAMUFLAGEM INTERNA *****
-def camuflar_palavras_numericas(texto: str) -> str:
-    """
-    Insere um caractere invisível (espaço de largura zero) DENTRO de palavras que são
-    números por extenso, para uma tentativa mais sofisticada de bypass do filtro da API.
-    """
-    palavras_numericas = {
-        'zero', 'um', 'uma', 'dois', 'duas', 'três', 'quatro', 'cinco', 'seis', 
-        'sete', 'oito', 'nove', 'dez', 'onze', 'doze', 'treze', 'catorze', 'quinze',
-        'dezesseis', 'dezessete', 'dezoito', 'dezenove', 'vinte', 'trinta', 'quarenta',
-        'cinquenta', 'sessenta', 'setenta', 'oitenta', 'noventa'
-    }
-    
-    # \u200B é o caractere de espaço de largura zero
-    caractere_invisivel = '\u200B'
-    
-    palavras = texto.split()
-    palavras_modificadas = []
-    modificado = False
-    
-    for palavra in palavras:
-        palavra_limpa = re.sub(r'[^\w]', '', palavra).lower()
-        if palavra_limpa in palavras_numericas:
-            # Insere o caractere invisível após a primeira letra da palavra original
-            palavra_camuflada = palavra[:1] + caractere_invisivel + palavra[1:]
-            palavras_modificadas.append(palavra_camuflada)
-            modificado = True
-        else:
-            palavras_modificadas.append(palavra)
-            
-    if modificado:
-        texto_modificado = ' '.join(palavras_modificadas)
-        logger.info(f"Texto camuflado para tentar bypass do filtro: '{texto_modificado[:100]}...'")
-        return texto_modificado
-        
-    return texto
-
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     """Gera um cabeçalho WAV para os dados de áudio recebidos."""
-    # ... (código da função inalterado) ...
+    # (Esta função permanece inalterada)
     logger.info(f"Iniciando conversão de {len(audio_data)} bytes de {mime_type} para WAV...")
     bits_per_sample = 16
     sample_rate = 24000 
@@ -90,60 +55,59 @@ def generate_audio_endpoint():
     if not data or not data.get('text') or not data.get('voice'):
         return jsonify({"error": "Os campos 'text' e 'voice' são obrigatórios."}), 400
 
-    text_to_narrate_original = data.get('text')
+    text_to_narrate = data.get('text')
     voice_name = data.get('voice')
     
-    # Aplica a nova estratégia de camuflagem
-    text_to_narrate = camuflar_palavras_numericas(text_to_narrate_original)
-    
-    logger.info(f"Voz solicitada: '{voice_name}'")
+    logger.info(f"Voz: '{voice_name}' | Texto: '{text_to_narrate[:100]}...'")
 
     try:
         client = genai.Client(api_key=api_key)
-        modelos_a_tentar = ["gemini-2.5-pro-preview-tts", "gemini-2.5-flash-preview-tts"]
+        
+        # ***** IMPLEMENTAÇÃO DA CONFIGURAÇÃO DE SEGURANÇA *****
+        # Instruímos a API a não bloquear conteúdo em nenhuma categoria.
+        safety_settings = {
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+        }
+
+        # Usamos apenas o modelo 'pro' como principal, a alternância não é mais necessária para o filtro.
+        model_name = "gemini-2.5-pro-preview-tts"
+        logger.info(f"Tentando com o modelo: {model_name} e configurações de segurança desativadas.")
+        
+        contents = [types.Content(role="user", parts=[types.Part.from_text(text=text_to_narrate)])]
+        generate_content_config = types.GenerateContentConfig(
+            response_modalities=["audio"],
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
+                )
+            )
+        )
+
         audio_data_chunks = []
         mime_type = "audio/unknown"
         
-        for i, model_name in enumerate(modelos_a_tentar):
-            logger.info(f"Tentativa {i+1}/{len(modelos_a_tentar)} com o modelo: {model_name}")
-            
-            contents = [types.Content(role="user", parts=[types.Part.from_text(text=text_to_narrate)])]
-            generate_content_config = types.GenerateContentConfig(
-                response_modalities=["audio"],
-                speech_config=types.SpeechConfig(
-                    voice_config=types.VoiceConfig(
-                        prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
-                    )
-                )
-            )
-
-            try:
-                audio_data_chunks = []
-                for chunk in client.models.generate_content_stream(
-                    model=model_name,
-                    contents=contents,
-                    config=generate_content_config
-                ):
-                    if (chunk.candidates and chunk.candidates[0].content and 
-                        chunk.candidates[0].content.parts and
-                        chunk.candidates[0].content.parts[0].inline_data and 
-                        chunk.candidates[0].content.parts[0].inline_data.data):
-                        inline_data = chunk.candidates[0].content.parts[0].inline_data
-                        audio_data_chunks.append(inline_data.data)
-                        mime_type = inline_data.mime_type
+        # A chamada à API agora inclui o parâmetro 'safety_settings'
+        for chunk in client.models.generate_content_stream(
+            model=model_name,
+            contents=contents,
+            config=generate_content_config,
+            safety_settings=safety_settings  # <-- Parâmetro adicionado aqui
+        ):
+            if (chunk.candidates and chunk.candidates[0].content and 
+                chunk.candidates[0].content.parts and
+                chunk.candidates[0].content.parts[0].inline_data and 
+                chunk.candidates[0].content.parts[0].inline_data.data):
                 
-                if audio_data_chunks:
-                    logger.info(f"Sucesso na geração de áudio com o modelo {model_name}.")
-                    break
-                else:
-                    logger.warning(f"O modelo {model_name} respondeu, mas não retornou dados de áudio.")
-
-            except Exception as e:
-                logger.error(f"Erro ao tentar usar o modelo {model_name}: {e}")
+                inline_data = chunk.candidates[0].content.parts[0].inline_data
+                audio_data_chunks.append(inline_data.data)
+                mime_type = inline_data.mime_type
         
         if not audio_data_chunks:
-             error_msg = "A API respondeu, mas não retornou dados de áudio em nenhuma das tentativas. O filtro de conteúdo pode ter bloqueado o texto."
-             logger.error(f"Falha total ao gerar áudio. Texto original: '{text_to_narrate_original[:100]}...'")
+             error_msg = "A API respondeu, mas não retornou dados de áudio. Mesmo com as configurações de segurança, o conteúdo pode ter sido bloqueado por outras razões."
+             logger.error(f"Falha total ao gerar áudio para o texto: '{text_to_narrate[:100]}...'")
              return jsonify({"error": error_msg}), 500
 
         full_audio_data = b''.join(audio_data_chunks)
