@@ -1,10 +1,10 @@
-# app.py - VERSÃO FINAL CORRIGIDA - Lógica 80/20 com envio de texto direto
+# app.py - VERSÃO FINAL COM MODELO PRO ISOLADO E ENVIO DIRETO DE TEXTO
 import os
 import io
 import mimetypes
 import struct
 import logging
-import random # [NOVO] Importa a biblioteca para a escolha aleatória
+# 'random' não é mais necessário, foi removido
 
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-# [ALTERADO] Expõe o cabeçalho personalizado 'X-Model-Used' para o frontend
+# Expõe o cabeçalho personalizado 'X-Model-Used' para o frontend
 CORS(app, expose_headers=['X-Model-Used'])
 
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
@@ -48,7 +48,7 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
 def home():
     """Rota para verificar se o serviço está online."""
     logger.info("Endpoint '/' acessado.")
-    return "Serviço de Narração no Railway está online e estável! (Usando google-genai com lógica 80/20)"
+    return "Serviço de Narração no Railway está online e estável! (Modelo: Gemini Pro TTS)"
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -57,45 +57,31 @@ def generate_audio_endpoint():
     
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        error_msg = "ERRO CRÍTICO: GEMINI_API_KEY não encontrada nas variáveis de ambiente."
+        error_msg = "ERRO CRÍTICO: GEMINI_API_KEY não encontrada."
         logger.error(error_msg)
-        return jsonify({"error": "Configuração do servidor incompleta: Chave de API ausente."}), 500
+        return jsonify({"error": "Configuração do servidor incompleta."}), 500
 
     data = request.get_json()
     if not data:
-        error_msg = "Requisição inválida, corpo JSON ausente."
-        logger.warning(error_msg)
-        return jsonify({"error": error_msg}), 400
+        return jsonify({"error": "Requisição inválida, corpo JSON ausente."}), 400
 
     text_to_narrate = data.get('text')
     voice_name = data.get('voice')
 
     if not text_to_narrate or not voice_name:
-        error_msg = "Os campos 'text' e 'voice' são obrigatórios."
-        logger.warning(f"{error_msg} Recebido: text={bool(text_to_narrate)}, voice={bool(voice_name)}")
-        return jsonify({"error": error_msg}), 400
+        return jsonify({"error": "Os campos 'text' e 'voice' são obrigatórios."}), 400
 
     try:
-        # --- [NOVA LÓGICA 80/20 DE SELEÇÃO DE MODELO] ---
-        if random.random() < 0.80:  # 80% de chance para o modelo Flash
-            model_to_use = "gemini-2.5-flash-preview-tts"
-            model_nickname = "flash"
-        else:  # 20% de chance para o modelo Pro
-            model_to_use = "gemini-2.5-pro-preview-tts"
-            model_nickname = "pro"
-        logger.info(f"Modelo selecionado pela lógica 80/20: {model_to_use} (Apelido: {model_nickname})")
-        # --- FIM DA LÓGICA DE SELEÇÃO ---
+        # --- [ALTERADO] Modelo Pro agora é fixo ---
+        model_to_use = "gemini-2.5-pro-preview-tts"
+        model_nickname = "pro"
+        logger.info(f"Usando modelo fixo: {model_to_use}")
+        # --- FIM DA ALTERAÇÃO ---
 
         logger.info("Configurando o cliente Google GenAI...")
         client = genai.Client(api_key=api_key)
 
-        # [MANTIDO] O texto é enviado diretamente, sem prompts extras.
-        contents = [
-            types.Content(
-                role="user",
-                parts=[types.Part.from_text(text=text_to_narrate)]
-            )
-        ]
+        # A estrutura 'contents' com 'role="user"' foi removida.
 
         generate_content_config = types.GenerateContentConfig(
             response_modalities=["audio"],
@@ -109,13 +95,18 @@ def generate_audio_endpoint():
         )
         logger.info(f"Configuração de geração criada para voz: '{voice_name}'")
 
-        logger.info(f"Iniciando chamada à API com o modelo: {model_to_use}...")
+        logger.info(f"Iniciando chamada à API com texto direto...")
         audio_data_chunks = []
+        
+        # --- [ALTERAÇÃO CRÍTICA] ---
+        # O texto do usuário ('text_to_narrate') é passado diretamente no parâmetro 'contents'.
+        # Isso evita o modo de "conversa" e trata o texto como dados brutos para TTS.
         for chunk in client.models.generate_content_stream(
-            model=model_to_use, # [ALTERADO] Usa o modelo selecionado
-            contents=contents,
+            model=model_to_use,
+            contents=text_to_narrate, # A string de texto é enviada diretamente aqui
             config=generate_content_config
         ):
+        # --- FIM DA ALTERAÇÃO CRÍTICA ---
             if (chunk.candidates and 
                 chunk.candidates[0].content and 
                 chunk.candidates[0].content.parts and
@@ -141,7 +132,6 @@ def generate_audio_endpoint():
             as_attachment=False
         ))
         
-        # [ALTERADO] Envia o apelido do modelo usado no cabeçalho.
         http_response.headers['X-Model-Used'] = model_nickname
         http_response.headers['X-Audio-Source-Mime'] = mime_type
         
@@ -155,5 +145,4 @@ def generate_audio_endpoint():
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    logger.info(f"Iniciando aplicação Flask na porta {port}")
     app.run(host='0.0.0.0', port=port)
