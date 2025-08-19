@@ -1,15 +1,15 @@
-# app.py - VERSÃO FINAL COM MODELO PRO ISOLADO E ENVIO DIRETO DE TEXTO
+# app.py - VERSÃO FINAL COM LÓGICA DE PROMPT SELETIVO
 import os
 import io
 import mimetypes
 import struct
 import logging
-# 'random' não é mais necessário, foi removido
+import random
 
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
 
-# Importações da nova biblioteca
+# Importações da biblioteca do Google
 from google import genai
 from google.genai import types
 
@@ -48,7 +48,7 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
 def home():
     """Rota para verificar se o serviço está online."""
     logger.info("Endpoint '/' acessado.")
-    return "Serviço de Narração no Railway está online e estável! (Modelo: Gemini Pro TTS)"
+    return "Serviço de Narração no Railway está online e estável! (Usando google-genai com lógica 80/20 e Prompt Seletivo)"
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -65,23 +65,29 @@ def generate_audio_endpoint():
     if not data:
         return jsonify({"error": "Requisição inválida, corpo JSON ausente."}), 400
 
-    text_to_narrate = data.get('text')
+    # [ALTERADO] Recebe os dois textos do frontend
+    full_prompt_text = data.get('full_prompt')
+    raw_user_text = data.get('raw_text')
     voice_name = data.get('voice')
 
-    if not text_to_narrate or not voice_name:
-        return jsonify({"error": "Os campos 'text' e 'voice' são obrigatórios."}), 400
+    if not full_prompt_text or not raw_user_text or not voice_name:
+        return jsonify({"error": "Os campos 'full_prompt', 'raw_text' e 'voice' são obrigatórios."}), 400
 
     try:
-        # --- [ALTERADO] Modelo Pro agora é fixo ---
-        model_to_use = "gemini-2.5-pro-preview-tts"
-        model_nickname = "pro"
-        logger.info(f"Usando modelo fixo: {model_to_use}")
-        # --- FIM DA ALTERAÇÃO ---
-
-        logger.info("Configurando o cliente Google GenAI...")
+        # --- LÓGICA DE PROMPT SELETIVO ---
+        # Reativa a lógica 80/20 e escolhe o texto apropriado para cada modelo.
+        if random.random() < 0.80:
+            model_to_use = "gemini-2.5-flash-preview-tts"
+            model_nickname = "flash"
+            text_to_process = raw_user_text # Flash usa SÓ o texto cru
+            logger.info(f"Modelo selecionado: Flash. Usando texto CRU.")
+        else:
+            model_to_use = "gemini-2.5-pro-preview-tts"
+            model_nickname = "pro"
+            text_to_process = full_prompt_text # Pro usa o prompt completo
+            logger.info(f"Modelo selecionado: Pro. Usando prompt COMPLETO.")
+        
         client = genai.Client(api_key=api_key)
-
-        # A estrutura 'contents' com 'role="user"' foi removida.
 
         generate_content_config = types.GenerateContentConfig(
             response_modalities=["audio"],
@@ -93,47 +99,33 @@ def generate_audio_endpoint():
                 )
             )
         )
-        logger.info(f"Configuração de geração criada para voz: '{voice_name}'")
-
-        logger.info(f"Iniciando chamada à API com texto direto...")
-        audio_data_chunks = []
         
-        # --- [ALTERAÇÃO CRÍTICA] ---
-        # O texto do usuário ('text_to_narrate') é passado diretamente no parâmetro 'contents'.
-        # Isso evita o modo de "conversa" e trata o texto como dados brutos para TTS.
+        audio_data_chunks = []
+        # O texto apropriado (seja cru ou completo) é passado diretamente aqui
         for chunk in client.models.generate_content_stream(
             model=model_to_use,
-            contents=text_to_narrate, # A string de texto é enviada diretamente aqui
+            contents=text_to_process,
             config=generate_content_config
         ):
-        # --- FIM DA ALTERAÇÃO CRÍTICA ---
-            if (chunk.candidates and 
-                chunk.candidates[0].content and 
+            if (chunk.candidates and chunk.candidates[0].content and 
                 chunk.candidates[0].content.parts and
                 chunk.candidates[0].content.parts[0].inline_data and 
                 chunk.candidates[0].content.parts[0].inline_data.data):
-                
                 inline_data = chunk.candidates[0].content.parts[0].inline_data
                 audio_data_chunks.append(inline_data.data)
 
         if not audio_data_chunks:
-             error_msg = "A API respondeu, mas não retornou dados de áudio."
-             logger.error(error_msg)
-             return jsonify({"error": error_msg}), 500
+             return jsonify({"error": "A API respondeu, mas não retornou dados de áudio."}), 500
 
         full_audio_data = b''.join(audio_data_chunks)
         mime_type = inline_data.mime_type if 'inline_data' in locals() else "audio/unknown"
         wav_data = convert_to_wav(full_audio_data, mime_type)
         
-        logger.info("Áudio gerado e convertido com sucesso. Enviando resposta...")
         http_response = make_response(send_file(
-            io.BytesIO(wav_data),
-            mimetype='audio/wav',
-            as_attachment=False
+            io.BytesIO(wav_data), mimetype='audio/wav', as_attachment=False
         ))
         
         http_response.headers['X-Model-Used'] = model_nickname
-        http_response.headers['X-Audio-Source-Mime'] = mime_type
         
         logger.info(f"Sucesso: Áudio WAV gerado com '{model_nickname}' e enviado ao cliente.")
         return http_response
