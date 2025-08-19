@@ -1,10 +1,10 @@
-# app.py - VERSÃO FINAL SIMPLIFICADA PARA TRABALHAR COM A LÓGICA DO FRONTEND
+# app.py - VERSÃO FINAL COM ROTEAMENTO INTELIGENTE CONTROLADO PELO FRONTEND
 import os
 import io
 import mimetypes
 import struct
 import logging
-import random
+# 'random' não é mais necessário
 
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
@@ -48,7 +48,7 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
 def home():
     """Rota para verificar se o serviço está online."""
     logger.info("Endpoint '/' acessado.")
-    return "Serviço de Narração no Railway está online e estável!"
+    return "Serviço de Narração no Railway está online e estável! (Usando Roteamento Inteligente de Modelo)"
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -65,25 +65,22 @@ def generate_audio_endpoint():
     if not data:
         return jsonify({"error": "Requisição inválida, corpo JSON ausente."}), 400
 
-    # [ALTERADO] Recebe apenas um campo 'text', pois o frontend já fez a escolha.
+    # [ALTERADO] Recebe o texto já processado e a decisão do modelo do frontend
     text_to_process = data.get('text') 
     voice_name = data.get('voice')
+    model_nickname = data.get('model_to_use', 'flash') # Recebe 'pro' ou 'flash', com 'flash' como padrão
 
-    # [ALTERADO] Validação simplificada para os dois campos recebidos.
     if not text_to_process or not voice_name:
         return jsonify({"error": "Os campos de texto e voz são obrigatórios."}), 400
 
     try:
-        # A lógica de qual texto usar foi movida para o frontend.
-        # O backend apenas executa a seleção do modelo.
-        if random.random() < 0.80:
-            model_to_use = "gemini-2.5-flash-preview-tts"
-            model_nickname = "flash"
+        # --- LÓGICA DE SELEÇÃO DE MODELO (AGORA OBEDECE O FRONTEND) ---
+        if model_nickname == 'pro':
+            model_to_use_fullname = "gemini-2.5-pro-preview-tts"
         else:
-            model_to_use = "gemini-2.5-pro-preview-tts"
-            model_nickname = "pro"
+            model_to_use_fullname = "gemini-2.5-flash-preview-tts"
         
-        logger.info(f"Modelo selecionado: {model_nickname}. Processando texto recebido.")
+        logger.info(f"Frontend solicitou o modelo: '{model_nickname}'. Usando: {model_to_use_fullname}")
         
         client = genai.Client(api_key=api_key)
 
@@ -101,7 +98,7 @@ def generate_audio_endpoint():
         audio_data_chunks = []
         # O texto já escolhido pelo frontend é passado diretamente para a API.
         for chunk in client.models.generate_content_stream(
-            model=model_to_use,
+            model=model_to_use_fullname,
             contents=text_to_process,
             config=generate_content_config
         ):
@@ -123,7 +120,7 @@ def generate_audio_endpoint():
             io.BytesIO(wav_data), mimetype='audio/wav', as_attachment=False
         ))
         
-        # O cabeçalho é enviado de volta, mas a decisão do modelo é feita aqui
+        # Envia de volta o modelo que foi usado para confirmação
         http_response.headers['X-Model-Used'] = model_nickname
         
         logger.info(f"Sucesso: Áudio WAV gerado com '{model_nickname}' e enviado ao cliente.")
