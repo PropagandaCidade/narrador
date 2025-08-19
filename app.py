@@ -1,4 +1,4 @@
-# app.py - VERSÃO FINAL COM LÓGICA DE PROMPT SELETIVO
+# app.py - VERSÃO FINAL COM LÓGICA DE PROMPT ESTRUTURADO PARA FLASH
 import os
 import io
 import mimetypes
@@ -48,7 +48,7 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
 def home():
     """Rota para verificar se o serviço está online."""
     logger.info("Endpoint '/' acessado.")
-    return "Serviço de Narração no Railway está online e estável! (Usando google-genai com lógica 80/20 e Prompt Seletivo)"
+    return "Serviço de Narração no Railway está online e estável! (Usando google-genai com lógica de Prompt Estruturado)"
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -65,13 +65,14 @@ def generate_audio_endpoint():
     if not data:
         return jsonify({"error": "Requisição inválida, corpo JSON ausente."}), 400
 
-    # [ALTERADO] Recebe os dois textos do frontend
+    # Recebe os três textos do frontend
     full_prompt_text = data.get('full_prompt')
-    raw_user_text = data.get('raw_text')
+    structured_prompt_text = data.get('structured_prompt')
+    raw_user_text = data.get('raw_text') # Mantido por segurança, embora não seja o principal
     voice_name = data.get('voice')
 
-    if not full_prompt_text or not raw_user_text or not voice_name:
-        return jsonify({"error": "Os campos 'full_prompt', 'raw_text' e 'voice' são obrigatórios."}), 400
+    if not full_prompt_text or not structured_prompt_text or not voice_name:
+        return jsonify({"error": "Os campos de prompt e voz são obrigatórios."}), 400
 
     try:
         # --- LÓGICA DE PROMPT SELETIVO ---
@@ -79,12 +80,12 @@ def generate_audio_endpoint():
         if random.random() < 0.80:
             model_to_use = "gemini-2.5-flash-preview-tts"
             model_nickname = "flash"
-            text_to_process = raw_user_text # Flash usa SÓ o texto cru
-            logger.info(f"Modelo selecionado: Flash. Usando texto CRU.")
+            text_to_process = structured_prompt_text # Flash usa o prompt ESTRUTURADO
+            logger.info(f"Modelo selecionado: Flash. Usando prompt ESTRUTURADO.")
         else:
             model_to_use = "gemini-2.5-pro-preview-tts"
             model_nickname = "pro"
-            text_to_process = full_prompt_text # Pro usa o prompt completo
+            text_to_process = full_prompt_text # Pro usa o prompt COMPLETO de linguagem natural
             logger.info(f"Modelo selecionado: Pro. Usando prompt COMPLETO.")
         
         client = genai.Client(api_key=api_key)
@@ -101,7 +102,7 @@ def generate_audio_endpoint():
         )
         
         audio_data_chunks = []
-        # O texto apropriado (seja cru ou completo) é passado diretamente aqui
+        # O texto apropriado (seja estruturado ou completo) é passado diretamente aqui
         for chunk in client.models.generate_content_stream(
             model=model_to_use,
             contents=text_to_process,
