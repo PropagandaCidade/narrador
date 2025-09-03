@@ -1,4 +1,4 @@
-# app.py - VERSÃO FINAL COM ROTEAMENTO INTELIGENTE CONTROLADO PELO FRONTEND
+# app.py - VERSÃO FINAL COM ROTEAMENTO INTELIGENTE E FALLBACK DE API KEY
 import os
 import io
 import mimetypes
@@ -12,6 +12,8 @@ from flask_cors import CORS
 # Importações da biblioteca do Google
 from google import genai
 from google.genai import types
+# [NOVO] Importação para capturar exceções específicas da API
+from google.api_core import exceptions as google_exceptions
 
 # --- Configuração de logging ---
 logging.basicConfig(level=logging.INFO)
@@ -48,16 +50,22 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
 def home():
     """Rota para verificar se o serviço está online."""
     logger.info("Endpoint '/' acessado.")
-    return "Serviço de Narração no Railway está online e estável! (Usando Roteamento Inteligente de Modelo)"
+    return "Serviço de Narração no Railway está online e estável! (Usando Roteamento Inteligente de Modelo e Fallback de API)"
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
-    """Endpoint principal que gera o áudio."""
+    """Endpoint principal que gera o áudio com lógica de fallback para múltiplas chaves API."""
     logger.info("Recebendo solicitação para /api/generate-audio")
     
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        error_msg = "ERRO CRÍTICO: GEMINI_API_KEY não encontrada."
+    # [ALTERADO] Lê as duas chaves das variáveis de ambiente
+    api_key_primary = os.environ.get("GEMINI_API_KEY_PRIMARY")
+    api_key_secondary = os.environ.get("GEMINI_API_KEY_SECONDARY")
+    
+    # Cria uma lista apenas com as chaves que foram definidas
+    api_keys_to_try = [key for key in [api_key_primary, api_key_secondary] if key]
+
+    if not api_keys_to_try:
+        error_msg = "ERRO CRÍTICO: Nenhuma chave de API (GEMINI_API_KEY_PRIMARY ou GEMINI_API_KEY_SECONDARY) foi encontrada."
         logger.error(error_msg)
         return jsonify({"error": "Configuração do servidor incompleta."}), 500
 
@@ -65,71 +73,88 @@ def generate_audio_endpoint():
     if not data:
         return jsonify({"error": "Requisição inválida, corpo JSON ausente."}), 400
 
-    # [ALTERADO] Recebe o texto já processado e a decisão do modelo do frontend
     text_to_process = data.get('text') 
     voice_name = data.get('voice')
-    model_nickname = data.get('model_to_use', 'flash') # Recebe 'pro' ou 'flash', com 'flash' como padrão
+    model_nickname = data.get('model_to_use', 'flash') 
 
     if not text_to_process or not voice_name:
         return jsonify({"error": "Os campos de texto e voz são obrigatórios."}), 400
 
-    try:
-        # --- LÓGICA DE SELEÇÃO DE MODELO (AGORA OBEDECE O FRONTEND) ---
-        if model_nickname == 'pro':
-            model_to_use_fullname = "gemini-2.5-pro-preview-tts"
-        else:
-            model_to_use_fullname = "gemini-2.5-flash-preview-tts"
-        
-        logger.info(f"Frontend solicitou o modelo: '{model_nickname}'. Usando: {model_to_use_fullname}")
-        
-        client = genai.Client(api_key=api_key)
+    # --- LÓGICA DE SELEÇÃO DE MODELO (IDÊNTICA AO SEU ARQUIVO ORIGINAL) ---
+    if model_nickname == 'pro':
+        model_to_use_fullname = "gemini-2.5-pro-preview-tts"
+    else:
+        model_to_use_fullname = "gemini-2.5-flash-preview-tts"
+    
+    logger.info(f"Frontend solicitou o modelo: '{model_nickname}'. Usando: {model_to_use_fullname}")
+    
+    # [ALTERADO] Inicia o loop para tentar as chaves em ordem
+    last_error = None
+    for i, api_key in enumerate(api_keys_to_try):
+        key_name = "PRIMARY" if i == 0 else "SECONDARY"
+        try:
+            logger.info(f"--- Iniciando tentativa com a chave API {key_name} ---")
+            
+            client = genai.Client(api_key=api_key)
 
-        generate_content_config = types.GenerateContentConfig(
-            response_modalities=["audio"],
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name=voice_name
+            generate_content_config = types.GenerateContentConfig(
+                response_modalities=["audio"],
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                            voice_name=voice_name
+                        )
                     )
                 )
             )
-        )
-        
-        audio_data_chunks = []
-        # O texto já escolhido pelo frontend é passado diretamente para a API.
-        for chunk in client.models.generate_content_stream(
-            model=model_to_use_fullname,
-            contents=text_to_process,
-            config=generate_content_config
-        ):
-            if (chunk.candidates and chunk.candidates[0].content and 
-                chunk.candidates[0].content.parts and
-                chunk.candidates[0].content.parts[0].inline_data and 
-                chunk.candidates[0].content.parts[0].inline_data.data):
-                inline_data = chunk.candidates[0].content.parts[0].inline_data
-                audio_data_chunks.append(inline_data.data)
+            
+            audio_data_chunks = []
+            for chunk in client.models.generate_content_stream(
+                model=model_to_use_fullname,
+                contents=text_to_process,
+                config=generate_content_config
+            ):
+                if (chunk.candidates and chunk.candidates[0].content and 
+                    chunk.candidates[0].content.parts and
+                    chunk.candidates[0].content.parts[0].inline_data and 
+                    chunk.candidates[0].content.parts[0].inline_data.data):
+                    inline_data = chunk.candidates[0].content.parts[0].inline_data
+                    audio_data_chunks.append(inline_data.data)
 
-        if not audio_data_chunks:
-             return jsonify({"error": "A API respondeu, mas não retornou dados de áudio."}), 500
+            if not audio_data_chunks:
+                 raise ValueError("A API respondeu, mas não retornou dados de áudio.")
 
-        full_audio_data = b''.join(audio_data_chunks)
-        mime_type = inline_data.mime_type if 'inline_data' in locals() else "audio/unknown"
-        wav_data = convert_to_wav(full_audio_data, mime_type)
-        
-        http_response = make_response(send_file(
-            io.BytesIO(wav_data), mimetype='audio/wav', as_attachment=False
-        ))
-        
-        # Envia de volta o modelo que foi usado para confirmação
-        http_response.headers['X-Model-Used'] = model_nickname
-        
-        logger.info(f"Sucesso: Áudio WAV gerado com '{model_nickname}' e enviado ao cliente.")
-        return http_response
+            # Se a geração foi bem-sucedida, o código continua a partir daqui
+            full_audio_data = b''.join(audio_data_chunks)
+            mime_type = inline_data.mime_type
+            wav_data = convert_to_wav(full_audio_data, mime_type)
+            
+            http_response = make_response(send_file(
+                io.BytesIO(wav_data), mimetype='audio/wav', as_attachment=False
+            ))
+            
+            http_response.headers['X-Model-Used'] = model_nickname
+            
+            logger.info(f"Sucesso com a chave {key_name}! Áudio WAV gerado com '{model_nickname}' e enviado ao cliente.")
+            return http_response # Encerra a função com sucesso
 
-    except Exception as e:
-        error_message = f"Erro ao contatar a API do Google GenAI: {e}"
-        logger.error(f"ERRO CRÍTICO NA API: {error_message}", exc_info=True)
-        return jsonify({"error": error_message}), 500
+        # [ALTERADO] Captura erros de cota, permissão ou autenticação para tentar a próxima chave
+        except (google_exceptions.ResourceExhausted, google_exceptions.PermissionDenied, google_exceptions.Unauthenticated) as e:
+            error_message = f"A chave {key_name} falhou com um erro de API ({type(e).__name__}). Tentando a próxima chave, se disponível."
+            logger.warning(error_message)
+            last_error = str(e)
+            continue # Pula para a próxima iteração do loop (próxima chave)
+
+        except Exception as e:
+            error_message = f"Erro crítico inesperado ao usar a chave {key_name}: {e}"
+            logger.error(f"ERRO CRÍTICO NA API: {error_message}", exc_info=True)
+            return jsonify({"error": error_message}), 500
+
+    # [ALTERADO] Se o loop terminar, significa que todas as chaves falharam
+    final_error_message = f"Não foi possível processar a solicitação. Todas as chaves de API falharam. Último erro registrado: {last_error}"
+    logger.error(final_error_message)
+    return jsonify({"error": final_error_message}), 500
+
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
