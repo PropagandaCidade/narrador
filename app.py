@@ -1,4 +1,4 @@
-# app.py - VERSÃO FINAL COM ROTEAMENTO INTELIGENTE E FALLBACK DE API KEY
+# app.py - VERSÃO FINAL COM ROTEAMENTO INTELIGENTE E FALLBACK DE API KEY (CHAVES EM UMA ÚNICA VARIÁVEL)
 import os
 import io
 import mimetypes
@@ -11,7 +11,6 @@ from flask_cors import CORS
 # Importações da biblioteca do Google
 from google import genai
 from google.genai import types
-# Importação para capturar exceções específicas da API
 from google.api_core import exceptions as google_exceptions
 
 # --- Configuração de logging ---
@@ -56,15 +55,19 @@ def generate_audio_endpoint():
     """Endpoint principal que gera o áudio com lógica de fallback para múltiplas chaves API."""
     logger.info("Recebendo solicitação para /api/generate-audio")
     
-    # Lê as duas chaves das variáveis de ambiente
-    api_key_primary = os.environ.get("GEMINI_API_KEY_PRIMARY")
-    api_key_secondary = os.environ.get("GEMINI_API_KEY_SECONDARY")
+    # [ALTERADO] Lê uma única variável de ambiente contendo as chaves separadas por vírgula
+    api_keys_string = os.environ.get("GEMINI_API_KEYS")
     
-    # Cria uma lista apenas com as chaves que foram definidas
-    api_keys_to_try = [key for key in [api_key_primary, api_key_secondary] if key]
+    if not api_keys_string:
+        error_msg = "ERRO CRÍTICO: A variável de ambiente GEMINI_API_KEYS não foi encontrada."
+        logger.error(error_msg)
+        return jsonify({"error": "Configuração do servidor incompleta."}), 500
+
+    # Cria uma lista de chaves, removendo espaços em branco e ignorando itens vazios
+    api_keys_to_try = [key.strip() for key in api_keys_string.split(',') if key.strip()]
 
     if not api_keys_to_try:
-        error_msg = "ERRO CRÍTICO: Nenhuma chave de API (GEMINI_API_KEY_PRIMARY ou GEMINI_API_KEY_SECONDARY) foi encontrada."
+        error_msg = "ERRO CRÍTICO: A variável GEMINI_API_KEYS foi encontrada, mas está vazia ou mal formatada."
         logger.error(error_msg)
         return jsonify({"error": "Configuração do servidor incompleta."}), 500
 
@@ -79,7 +82,6 @@ def generate_audio_endpoint():
     if not text_to_process or not voice_name:
         return jsonify({"error": "Os campos de texto e voz são obrigatórios."}), 400
 
-    # --- LÓGICA DE SELEÇÃO DE MODELO (IDÊNTICA AO SEU ARQUIVO ORIGINAL) ---
     if model_nickname == 'pro':
         model_to_use_fullname = "gemini-2.5-pro-preview-tts"
     else:
@@ -89,9 +91,8 @@ def generate_audio_endpoint():
     
     last_error = None
     for i, api_key in enumerate(api_keys_to_try):
-        key_name = "PRIMARY" if i == 0 else "SECONDARY"
         try:
-            logger.info(f"--- Iniciando tentativa com a chave API {key_name} ---")
+            logger.info(f"--- Iniciando tentativa com a chave API #{i + 1} ---")
             
             client = genai.Client(api_key=api_key)
 
@@ -132,17 +133,17 @@ def generate_audio_endpoint():
             
             http_response.headers['X-Model-Used'] = model_nickname
             
-            logger.info(f"Sucesso com a chave {key_name}! Áudio WAV gerado com '{model_nickname}' e enviado ao cliente.")
+            logger.info(f"Sucesso com a chave #{i + 1}! Áudio WAV gerado com '{model_nickname}' e enviado ao cliente.")
             return http_response
 
         except (google_exceptions.ResourceExhausted, google_exceptions.PermissionDenied, google_exceptions.Unauthenticated) as e:
-            error_message = f"A chave {key_name} falhou com um erro de API ({type(e).__name__}). Tentando a próxima chave, se disponível."
+            error_message = f"A chave #{i + 1} falhou com um erro de API ({type(e).__name__}). Tentando a próxima chave, se disponível."
             logger.warning(error_message)
             last_error = str(e)
             continue
 
         except Exception as e:
-            error_message = f"Erro crítico inesperado ao usar a chave {key_name}: {e}"
+            error_message = f"Erro crítico inesperado ao usar a chave #{i + 1}: {e}"
             logger.error(f"ERRO CRÍTICO NA API: {error_message}", exc_info=True)
             return jsonify({"error": error_message}), 500
 
