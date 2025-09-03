@@ -12,7 +12,7 @@ from flask_cors import CORS
 # Importações da biblioteca do Google
 from google import genai
 from google.genai import types
-# [NOVO] Importação para capturar exceções específicas da API
+# Importação para capturar exceções específicas da API
 from google.api_core import exceptions as google_exceptions
 
 # --- Configuração de logging ---
@@ -57,7 +57,7 @@ def generate_audio_endpoint():
     """Endpoint principal que gera o áudio com lógica de fallback para múltiplas chaves API."""
     logger.info("Recebendo solicitação para /api/generate-audio")
     
-    # [ALTERADO] Lê as duas chaves das variáveis de ambiente
+    # Lê as duas chaves das variáveis de ambiente
     api_key_primary = os.environ.get("GEMINI_API_KEY_PRIMARY")
     api_key_secondary = os.environ.get("GEMINI_API_KEY_SECONDARY")
     
@@ -88,7 +88,7 @@ def generate_audio_endpoint():
     
     logger.info(f"Frontend solicitou o modelo: '{model_nickname}'. Usando: {model_to_use_fullname}")
     
-    # [ALTERADO] Inicia o loop para tentar as chaves em ordem
+    # Inicia o loop para tentar as chaves em ordem
     last_error = None
     for i, api_key in enumerate(api_keys_to_try):
         key_name = "PRIMARY" if i == 0 else "SECONDARY"
@@ -109,6 +109,7 @@ def generate_audio_endpoint():
             )
             
             audio_data_chunks = []
+            # O texto já escolhido pelo frontend é passado diretamente para a API.
             for chunk in client.models.generate_content_stream(
                 model=model_to_use_fullname,
                 contents=text_to_process,
@@ -126,19 +127,20 @@ def generate_audio_endpoint():
 
             # Se a geração foi bem-sucedida, o código continua a partir daqui
             full_audio_data = b''.join(audio_data_chunks)
-            mime_type = inline_data.mime_type
+            mime_type = inline_data.mime_type if 'inline_data' in locals() else "audio/unknown"
             wav_data = convert_to_wav(full_audio_data, mime_type)
             
             http_response = make_response(send_file(
                 io.BytesIO(wav_data), mimetype='audio/wav', as_attachment=False
             ))
             
+            # Envia de volta o modelo que foi usado para confirmação
             http_response.headers['X-Model-Used'] = model_nickname
             
             logger.info(f"Sucesso com a chave {key_name}! Áudio WAV gerado com '{model_nickname}' e enviado ao cliente.")
             return http_response # Encerra a função com sucesso
 
-        # [ALTERADO] Captura erros de cota, permissão ou autenticação para tentar a próxima chave
+        # Captura erros de cota, permissão ou autenticação para tentar a próxima chave
         except (google_exceptions.ResourceExhausted, google_exceptions.PermissionDenied, google_exceptions.Unauthenticated) as e:
             error_message = f"A chave {key_name} falhou com um erro de API ({type(e).__name__}). Tentando a próxima chave, se disponível."
             logger.warning(error_message)
@@ -150,7 +152,7 @@ def generate_audio_endpoint():
             logger.error(f"ERRO CRÍTICO NA API: {error_message}", exc_info=True)
             return jsonify({"error": error_message}), 500
 
-    # [ALTERADO] Se o loop terminar, significa que todas as chaves falharam
+    # Se o loop terminar, significa que todas as chaves falharam
     final_error_message = f"Não foi possível processar a solicitação. Todas as chaves de API falharam. Último erro registrado: {last_error}"
     logger.error(final_error_message)
     return jsonify({"error": final_error_message}), 500
