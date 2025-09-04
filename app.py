@@ -1,4 +1,4 @@
-# app.py - VERSÃO SIMPLIFICADA E CORRIGIDA PARA DEPLOY ÚNICO
+# app.py - VERSÃO SIMPLIFICADA E COM A CORREÇÃO FINAL DE EXCEÇÃO
 import os
 import io
 import mimetypes
@@ -102,7 +102,8 @@ def generate_audio_endpoint():
         logger.info(f"Sucesso: Áudio WAV gerado e enviado ao cliente.")
         return http_response
 
-    except (google_exceptions.ResourceExhausted, google_exceptions.PermissionDenied, google_exceptions.Unauthenticated, google_exceptions.InvalidArgument) as e:
+    # [CORREÇÃO FINAL] Adicionado 'BadRequest' à lista de exceções que acionam o failover.
+    except (google_exceptions.ResourceExhausted, google_exceptions.PermissionDenied, google_exceptions.Unauthenticated, google_exceptions.BadRequest) as e:
         error_message = f"Falha de API que permite nova tentativa: {type(e).__name__}"
         logger.warning(error_message)
         return jsonify({"error": error_message, "retryable": True}), 429
