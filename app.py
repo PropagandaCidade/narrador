@@ -1,4 +1,4 @@
-# app.py - VERSÃO SIMPLIFICADA E COM A CORREÇÃO FINAL DE EXCEÇÃO
+# app.py - VERSÃO DE DEPURAÇÃO PARA IDENTIFICAR A EXCEÇÃO CORRETA
 import os
 import io
 import mimetypes
@@ -19,6 +19,7 @@ app = Flask(__name__)
 CORS(app, expose_headers=['X-Model-Used'])
 
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
+    # ... (nenhuma mudança nesta função) ...
     logger.info(f"Convertendo dados de áudio de {mime_type} para WAV...")
     bits_per_sample = 16
     sample_rate = 24000
@@ -38,7 +39,7 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
 
 @app.route('/')
 def home():
-    return "Serviço de Narração individual está online."
+    return "Serviço de Narração individual está online (Modo de Depuração)."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -62,6 +63,7 @@ def generate_audio_endpoint():
         return jsonify({"error": "Os campos de texto e voz são obrigatórios."}), 400
 
     try:
+        # ... (nenhuma mudança no bloco try) ...
         if model_nickname == 'pro':
             model_to_use_fullname = "gemini-2.5-pro-preview-tts"
         else:
@@ -102,15 +104,19 @@ def generate_audio_endpoint():
         logger.info(f"Sucesso: Áudio WAV gerado e enviado ao cliente.")
         return http_response
 
-    # [CORREÇÃO FINAL] Adicionado 'BadRequest' à lista de exceções que acionam o failover.
     except (google_exceptions.ResourceExhausted, google_exceptions.PermissionDenied, google_exceptions.Unauthenticated, google_exceptions.BadRequest) as e:
         error_message = f"Falha de API que permite nova tentativa: {type(e).__name__}"
         logger.warning(error_message)
         return jsonify({"error": error_message, "retryable": True}), 429
 
+    # [ALTERAÇÃO DE DEPURAÇÃO] O bloco abaixo agora vai nos dizer o nome do erro.
     except Exception as e:
-        error_message = f"Erro inesperado que NÃO permite nova tentativa: {e}"
-        logger.error(f"ERRO CRÍTICO NA API: {error_message}", exc_info=True)
+        # A nova mensagem de erro vai incluir o TIPO do erro.
+        error_message = f"Erro inesperado. TIPO DO ERRO: [{type(e).__name__}]. MENSAGEM: {e}"
+        
+        # Também vamos registrar essa informação no log do Railway.
+        logger.error(f"ERRO CRÍTICO NÃO CAPTURADO. TIPO: {type(e).__name__}. MENSAGEM: {e}", exc_info=True)
+        
         return jsonify({"error": error_message}), 500
 
 if __name__ == '__main__':
