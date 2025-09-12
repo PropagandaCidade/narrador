@@ -1,4 +1,4 @@
-# app.py - VERSÃO FINAL DE PRODUÇÃO
+# app.py - VERSÃO FINAL DE PRODUÇÃO (com correção de pronúncia)
 import os
 import io
 import mimetypes
@@ -12,6 +12,9 @@ from google import genai
 from google.genai import types
 from google.api_core import exceptions as google_exceptions
 
+# <-- 1. IMPORTA A NOVA FUNÇÃO DO "CÉREBRO AUXILIAR"
+from text_utils import correct_grammar_for_grams
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -19,7 +22,6 @@ app = Flask(__name__)
 CORS(app, expose_headers=['X-Model-Used'])
 
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
-    # Esta função está correta e não precisa de alterações
     logger.info(f"Convertendo dados de áudio de {mime_type} para WAV...")
     bits_per_sample = 16
     sample_rate = 24000
@@ -63,7 +65,10 @@ def generate_audio_endpoint():
         return jsonify({"error": "Os campos de texto e voz são obrigatórios."}), 400
 
     try:
-        # Bloco principal de geração de áudio
+        # <-- 2. APLICA A CORREÇÃO ANTES DE ENVIAR PARA A API
+        logger.info("Aplicando pré-processamento de texto para correção de pronúncia...")
+        corrected_text = correct_grammar_for_grams(text_to_process)
+
         if model_nickname == 'pro':
             model_to_use_fullname = "gemini-2.5-pro-preview-tts"
         else:
@@ -85,8 +90,9 @@ def generate_audio_endpoint():
         )
         
         audio_data_chunks = []
+        # Usa o texto corrigido para gerar o áudio
         for chunk in client.models.generate_content_stream(
-            model=model_to_use_fullname, contents=text_to_process, config=generate_content_config
+            model=model_to_use_fullname, contents=corrected_text, config=generate_content_config
         ):
             if (chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts and chunk.candidates[0].content.parts[0].inline_data and chunk.candidates[0].content.parts[0].inline_data.data):
                 inline_data = chunk.candidates[0].content.parts[0].inline_data
@@ -104,14 +110,12 @@ def generate_audio_endpoint():
         logger.info(f"Sucesso: Áudio WAV gerado e enviado ao cliente.")
         return http_response
 
-    # [CORREÇÃO FINAL E DEFINITIVA] Adicionado 'ClientError' à lista de exceções que acionam o failover.
     except (google_exceptions.ResourceExhausted, google_exceptions.PermissionDenied, google_exceptions.Unauthenticated, google_exceptions.ClientError) as e:
         error_message = f"Falha de API que permite nova tentativa: {type(e).__name__}"
         logger.warning(error_message)
         return jsonify({"error": error_message, "retryable": True}), 429
 
     except Exception as e:
-        # Retornamos à mensagem de erro de produção normal
         error_message = f"Erro inesperado que NÃO permite nova tentativa: {e}"
         logger.error(f"ERRO CRÍTICO NA API: {error_message}", exc_info=True)
         return jsonify({"error": error_message}), 500
