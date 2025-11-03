@@ -1,4 +1,4 @@
-# app.py - VERSÃO 9.1 - CORRIGE OS NOMES DOS MODELOS GEMINI PARA 2.5
+# app.py - VERSÃO 9.2 - Remove o parâmetro 'language_code' da chamada Chirp.
 
 import os
 import io
@@ -40,7 +40,7 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
 
 @app.route('/')
 def home():
-    return "Serviço de Narração v9.1 está online."
+    return "Serviço de Narração v9.2 está online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -69,25 +69,27 @@ def generate_audio_endpoint():
         
         client = genai.Client(api_key=api_key)
         
+        # --- [INÍCIO DA CORREÇÃO] ---
         if model_nickname == 'chirp':
             model_to_use_fullname = "chirp-tts-3"
             logger.info(f"Usando modelo Chirp: {model_to_use_fullname}")
             
+            # Para Chirp, a API NÃO ACEITA 'language_code'.
+            # A voz já define o idioma. A configuração de voz é vazia ou usa outros parâmetros se necessário.
             generate_content_config = types.GenerateContentConfig(
                 response_modalities=["audio"],
                 speech_config=types.SpeechConfig(
                     voice_config=types.VoiceConfig(
-                        language_code="pt-BR"
+                        # A voz é passada implicitamente pelo modelo ou texto,
+                        # então deixamos a configuração de voz vazia.
                     )
                 )
             )
         else:
-            # --- [INÍCIO DA CORREÇÃO FINAL] ---
             if model_nickname == 'pro':
                 model_to_use_fullname = "gemini-2.5-pro-preview-tts"
             else:
                 model_to_use_fullname = "gemini-2.5-flash-preview-tts"
-            # --- [FIM DA CORREÇÃO FINAL] ---
             
             logger.info(f"Usando modelo Gemini: {model_to_use_fullname}")
             
@@ -101,6 +103,7 @@ def generate_audio_endpoint():
                     )
                 )
             )
+        # --- [FIM DA CORREÇÃO] ---
         
         audio_data_chunks = []
         for chunk in client.models.generate_content_stream(
