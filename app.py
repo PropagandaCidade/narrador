@@ -1,4 +1,4 @@
-# app.py - VERSÃO 9.3 - CORREÇÃO FINAL dos nomes de modelo.
+# app.py - VERSÃO 9.4 - Implementa a chamada correta e separada para o modelo Chirp.
 
 import os
 import io
@@ -40,7 +40,7 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
 
 @app.route('/')
 def home():
-    return "Serviço de Narração v9.3 está online."
+    return "Serviço de Narração v9.4 está online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -70,26 +70,39 @@ def generate_audio_endpoint():
         client = genai.Client(api_key=api_key)
         
         # --- [INÍCIO DA CORREÇÃO FINAL] ---
-        # Mapeando os nicknames do frontend para os NOMES REAIS E CORRETOS da API
-        if model_nickname == 'pro' or model_nickname == 'chirp':
-            # "Chirp 3 HD" e "Pro" usarão o melhor modelo disponível.
-            model_to_use_fullname = "gemini-2.5-pro-preview-tts"
-        else: # 'flash' é o padrão
-            model_to_use_fullname = "gemini-2.5-flash-preview-tts"
         
-        logger.info(f"Nickname recebido: '{model_nickname}'. Usando modelo real: '{model_to_use_fullname}'")
-        
-        # A configuração para os modelos Gemini TTS usa prebuilt_voice_config
-        generate_content_config = types.GenerateContentConfig(
-            response_modalities=["audio"],
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name=voice_name
+        if model_nickname == 'chirp':
+            model_to_use_fullname = "chirp-v3-0" # Nome técnico do modelo Chirp
+            logger.info(f"Usando modelo Chirp: {model_to_use_fullname}")
+            
+            # Chirp usa language_code e não voice_name.
+            generate_content_config = types.GenerateContentConfig(
+                response_modalities=["audio"],
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        language_code="pt-BR"
                     )
                 )
             )
-        )
+        else:
+            if model_nickname == 'pro':
+                model_to_use_fullname = "gemini-2.5-pro-preview-tts"
+            else: # 'flash' é o padrão
+                model_to_use_fullname = "gemini-2.5-flash-preview-tts"
+            
+            logger.info(f"Usando modelo Gemini: {model_to_use_fullname}")
+            
+            # Gemini usa prebuilt_voice_config com voice_name.
+            generate_content_config = types.GenerateContentConfig(
+                response_modalities=["audio"],
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                            voice_name=voice_name
+                        )
+                    )
+                )
+            )
         # --- [FIM DA CORREÇÃO FINAL] ---
         
         audio_data_chunks = []
