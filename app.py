@@ -1,4 +1,4 @@
-# app.py - VERSÃO FINAL DE PRODUÇÃO (com correção de pronúncia)
+# app.py - VERSÃO FINAL DE PRODUÇÃO (com correção de pronúncia e import)
 import os
 import io
 import mimetypes
@@ -8,11 +8,14 @@ import logging
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
 
-from google import genai
-from google.genai import types
+# --- [INÍCIO DA CORREÇÃO] ---
+# A forma correta de importar a biblioteca do Google Gemini.
+import google.generativeai as genai
+# --- [FIM DA CORREÇÃO] ---
+
+from google.generativeai import types
 from google.api_core import exceptions as google_exceptions
 
-# <-- 1. IMPORTA A NOVA FUNÇÃO DO "CÉREBRO AUXILIAR"
 from text_utils import correct_grammar_for_grams
 
 logging.basicConfig(level=logging.INFO)
@@ -65,44 +68,32 @@ def generate_audio_endpoint():
         return jsonify({"error": "Os campos de texto e voz são obrigatórios."}), 400
 
     try:
-        # <-- 2. APLICA A CORREÇÃO ANTES DE ENVIAR PARA A API
         logger.info("Aplicando pré-processamento de texto para correção de pronúncia...")
         corrected_text = correct_grammar_for_grams(text_to_process)
 
         if model_nickname == 'pro':
-            model_to_use_fullname = "gemini-2.5-pro-preview-tts"
+            model_to_use_fullname = "models/text-to-speech-pro" # Nome de modelo ajustado
         else:
-            model_to_use_fullname = "gemini-2.5-flash-preview-tts"
+            model_to_use_fullname = "models/text-to-speech" # Nome de modelo ajustado
         
         logger.info(f"Usando modelo: {model_to_use_fullname}")
         
-        client = genai.Client(api_key=api_key)
+        # A forma de configurar a API agora é diretamente no cliente
+        genai.configure(api_key=api_key)
 
-        generate_content_config = types.GenerateContentConfig(
-            response_modalities=["audio"],
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name=voice_name
-                    )
-                )
-            )
+        # O restante da lógica permanece a mesma, mas usando a API configurada
+        tts_response = genai.text_to_speech(
+            model=model_to_use_fullname,
+            text=corrected_text,
+            voice_name=voice_name
         )
-        
-        audio_data_chunks = []
-        # Usa o texto corrigido para gerar o áudio
-        for chunk in client.models.generate_content_stream(
-            model=model_to_use_fullname, contents=corrected_text, config=generate_content_config
-        ):
-            if (chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts and chunk.candidates[0].content.parts[0].inline_data and chunk.candidates[0].content.parts[0].inline_data.data):
-                inline_data = chunk.candidates[0].content.parts[0].inline_data
-                audio_data_chunks.append(inline_data.data)
 
-        if not audio_data_chunks:
+        # A resposta agora vem em um objeto com o atributo 'audio_content'
+        if not tts_response.audio_content:
              return jsonify({"error": "A API respondeu, mas não retornou dados de áudio."}), 500
 
-        full_audio_data = b''.join(audio_data_chunks)
-        wav_data = convert_to_wav(full_audio_data, inline_data.mime_type)
+        # O tipo MIME é sempre WAV agora com a nova API
+        wav_data = convert_to_wav(tts_response.audio_content, 'audio/wav')
         
         http_response = make_response(send_file(io.BytesIO(wav_data), mimetype='audio/wav', as_attachment=False))
         http_response.headers['X-Model-Used'] = model_nickname
@@ -122,4 +113,5 @@ def generate_audio_endpoint():
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port)```
+
