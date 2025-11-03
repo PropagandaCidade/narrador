@@ -1,4 +1,4 @@
-# app.py - VERSÃO 6.0 - Final, com autenticação corrigida para a biblioteca v0.8.5+
+# app.py - VERSÃO 6.1 - Forçando o deploy com mudança visível.
 import os
 import io
 import struct
@@ -19,6 +19,7 @@ app = Flask(__name__)
 CORS(app, expose_headers=['X-Model-Used'])
 
 def convert_to_wav(audio_data: bytes) -> bytes:
+    # Esta função permanece a mesma
     logger.info("Verificando e empacotando dados de áudio para WAV...")
     bits_per_sample = 16
     sample_rate = 24000
@@ -33,12 +34,12 @@ def convert_to_wav(audio_data: bytes) -> bytes:
         b"RIFF", chunk_size, b"WAVE", b"fmt ", 16, 1, num_channels,
         sample_rate, byte_rate, block_align, bits_per_sample, b"data", data_size
     )
-    logger.info("Empacotamento WAV concluído.")
     return header + audio_data
 
 @app.route('/')
 def home():
-    return "Serviço de Narração individual está online."
+    # MUDANÇA VISÍVEL PARA CONFIRMAR O DEPLOY
+    return "Serviço de Narração v6.1 - Autenticação Corrigida - Online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -72,9 +73,7 @@ def generate_audio_endpoint():
         
         logger.info(f"Usando modelo: {model_to_use_fullname}")
         
-        # --- [CORREÇÃO DEFINITIVA] ---
-        # A autenticação é feita criando um cliente TTS com a API Key.
-        # A função genai.configure() foi removida.
+        # A forma correta de autenticar para a biblioteca v0.8.5+
         tts_client = genai.TextToSpeechClient(api_key=api_key)
         
         tts_response = tts_client.text_to_speech(
@@ -82,12 +81,10 @@ def generate_audio_endpoint():
             text=corrected_text,
             voice_name=voice_name
         )
-        # --- [FIM DA CORREÇÃO] ---
 
         if not tts_response.audio_content:
             return jsonify({"error": "A API respondeu, mas não retornou dados de áudio."}), 500
 
-        # A API retorna WAV puro, então a conversão não é necessária, mas podemos manter como salvaguarda
         wav_data = tts_response.audio_content
         
         http_response = make_response(send_file(io.BytesIO(wav_data), mimetype='audio/wav', as_attachment=False))
