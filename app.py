@@ -1,15 +1,18 @@
-# app.py - VERSÃO 6.1 - Forçando o deploy com mudança visível.
+# app.py - VERSÃO FINAL DE PRODUÇÃO (com correção de pronúncia)
 import os
 import io
+import mimetypes
 import struct
 import logging
 
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from google.api_core import exceptions as google_exceptions
 
+# <-- 1. IMPORTA A NOVA FUNÇÃO DO "CÉREBRO AUXILIAR"
 from text_utils import correct_grammar_for_grams
 
 logging.basicConfig(level=logging.INFO)
@@ -18,9 +21,8 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app, expose_headers=['X-Model-Used'])
 
-def convert_to_wav(audio_data: bytes) -> bytes:
-    # Esta função permanece a mesma
-    logger.info("Verificando e empacotando dados de áudio para WAV...")
+def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
+    logger.info(f"Convertendo dados de áudio de {mime_type} para WAV...")
     bits_per_sample = 16
     sample_rate = 24000
     num_channels = 1
@@ -34,12 +36,12 @@ def convert_to_wav(audio_data: bytes) -> bytes:
         b"RIFF", chunk_size, b"WAVE", b"fmt ", 16, 1, num_channels,
         sample_rate, byte_rate, block_align, bits_per_sample, b"data", data_size
     )
+    logger.info("Conversão para WAV concluída.")
     return header + audio_data
 
 @app.route('/')
 def home():
-    # MUDANÇA VISÍVEL PARA CONFIRMAR O DEPLOY
-    return "Serviço de Narração v6.1 - Autenticação Corrigida - Online."
+    return "Serviço de Narração individual está online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -63,29 +65,44 @@ def generate_audio_endpoint():
         return jsonify({"error": "Os campos de texto e voz são obrigatórios."}), 400
 
     try:
-        logger.info("Aplicando pré-processamento de texto...")
+        # <-- 2. APLICA A CORREÇÃO ANTES DE ENVIAR PARA A API
+        logger.info("Aplicando pré-processamento de texto para correção de pronúncia...")
         corrected_text = correct_grammar_for_grams(text_to_process)
 
         if model_nickname == 'pro':
-            model_to_use_fullname = "models/text-to-speech-pro"
+            model_to_use_fullname = "gemini-2.5-pro-preview-tts"
         else:
-            model_to_use_fullname = "models/text-to-speech"
+            model_to_use_fullname = "gemini-2.5-flash-preview-tts"
         
         logger.info(f"Usando modelo: {model_to_use_fullname}")
         
-        # A forma correta de autenticar para a biblioteca v0.8.5+
-        tts_client = genai.TextToSpeechClient(api_key=api_key)
-        
-        tts_response = tts_client.text_to_speech(
-            model=model_to_use_fullname,
-            text=corrected_text,
-            voice_name=voice_name
+        client = genai.Client(api_key=api_key)
+
+        generate_content_config = types.GenerateContentConfig(
+            response_modalities=["audio"],
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name=voice_name
+                    )
+                )
+            )
         )
+        
+        audio_data_chunks = []
+        # Usa o texto corrigido para gerar o áudio
+        for chunk in client.models.generate_content_stream(
+            model=model_to_use_fullname, contents=corrected_text, config=generate_content_config
+        ):
+            if (chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts and chunk.candidates[0].content.parts[0].inline_data and chunk.candidates[0].content.parts[0].inline_data.data):
+                inline_data = chunk.candidates[0].content.parts[0].inline_data
+                audio_data_chunks.append(inline_data.data)
 
-        if not tts_response.audio_content:
-            return jsonify({"error": "A API respondeu, mas não retornou dados de áudio."}), 500
+        if not audio_data_chunks:
+             return jsonify({"error": "A API respondeu, mas não retornou dados de áudio."}), 500
 
-        wav_data = tts_response.audio_content
+        full_audio_data = b''.join(audio_data_chunks)
+        wav_data = convert_to_wav(full_audio_data, inline_data.mime_type)
         
         http_response = make_response(send_file(io.BytesIO(wav_data), mimetype='audio/wav', as_attachment=False))
         http_response.headers['X-Model-Used'] = model_nickname
@@ -94,7 +111,7 @@ def generate_audio_endpoint():
         return http_response
 
     except (google_exceptions.ResourceExhausted, google_exceptions.PermissionDenied, google_exceptions.Unauthenticated, google_exceptions.ClientError) as e:
-        error_message = f"Falha de API que permite nova tentativa: {type(e).__name__} - {e}"
+        error_message = f"Falha de API que permite nova tentativa: {type(e).__name__}"
         logger.warning(error_message)
         return jsonify({"error": error_message, "retryable": True}), 429
 
