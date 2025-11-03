@@ -1,7 +1,7 @@
-# app.py - VERSÃO FINAL DE PRODUÇÃO (com correção de pronúncia)
+# app.py - VERSÃO 9.1 - CORRIGE OS NOMES DOS MODELOS GEMINI PARA 2.5
+
 import os
 import io
-import mimetypes
 import struct
 import logging
 
@@ -12,7 +12,6 @@ from google import genai
 from google.genai import types
 from google.api_core import exceptions as google_exceptions
 
-# <-- 1. IMPORTA A NOVA FUNÇÃO DO "CÉREBRO AUXILIAR"
 from text_utils import correct_grammar_for_grams
 
 logging.basicConfig(level=logging.INFO)
@@ -41,7 +40,7 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
 
 @app.route('/')
 def home():
-    return "Serviço de Narração individual está online."
+    return "Serviço de Narração v9.1 está online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -65,32 +64,45 @@ def generate_audio_endpoint():
         return jsonify({"error": "Os campos de texto e voz são obrigatórios."}), 400
 
     try:
-        # <-- 2. APLICA A CORREÇÃO ANTES DE ENVIAR PARA A API
-        logger.info("Aplicando pré-processamento de texto para correção de pronúncia...")
+        logger.info("Aplicando pré-processamento de texto...")
         corrected_text = correct_grammar_for_grams(text_to_process)
-
-        if model_nickname == 'pro':
-            model_to_use_fullname = "gemini-2.5-pro-preview-tts"
-        else:
-            model_to_use_fullname = "gemini-2.5-flash-preview-tts"
-        
-        logger.info(f"Usando modelo: {model_to_use_fullname}")
         
         client = genai.Client(api_key=api_key)
-
-        generate_content_config = types.GenerateContentConfig(
-            response_modalities=["audio"],
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name=voice_name
+        
+        if model_nickname == 'chirp':
+            model_to_use_fullname = "chirp-tts-3"
+            logger.info(f"Usando modelo Chirp: {model_to_use_fullname}")
+            
+            generate_content_config = types.GenerateContentConfig(
+                response_modalities=["audio"],
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        language_code="pt-BR"
                     )
                 )
             )
-        )
+        else:
+            # --- [INÍCIO DA CORREÇÃO FINAL] ---
+            if model_nickname == 'pro':
+                model_to_use_fullname = "gemini-2.5-pro-preview-tts"
+            else:
+                model_to_use_fullname = "gemini-2.5-flash-preview-tts"
+            # --- [FIM DA CORREÇÃO FINAL] ---
+            
+            logger.info(f"Usando modelo Gemini: {model_to_use_fullname}")
+            
+            generate_content_config = types.GenerateContentConfig(
+                response_modalities=["audio"],
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                            voice_name=voice_name
+                        )
+                    )
+                )
+            )
         
         audio_data_chunks = []
-        # Usa o texto corrigido para gerar o áudio
         for chunk in client.models.generate_content_stream(
             model=model_to_use_fullname, contents=corrected_text, config=generate_content_config
         ):
