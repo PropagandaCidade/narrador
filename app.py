@@ -1,4 +1,4 @@
-# app.py - VERSÃO 9.4 - Implementa a chamada correta e separada para o modelo Chirp.
+# app.py - VERSÃO 9.5 - Remove completamente o voice_config para a chamada Chirp.
 
 import os
 import io
@@ -21,6 +21,7 @@ app = Flask(__name__)
 CORS(app, expose_headers=['X-Model-Used'])
 
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
+    # ... (função inalterada) ...
     logger.info(f"Convertendo dados de áudio de {mime_type} para WAV...")
     bits_per_sample = 16
     sample_rate = 24000
@@ -40,7 +41,7 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
 
 @app.route('/')
 def home():
-    return "Serviço de Narração v9.4 está online."
+    return "Serviço de Narração v9.5 está online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -48,12 +49,12 @@ def generate_audio_endpoint():
     
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        error_msg = "ERRO CRÍTICO: GEMINI_API_KEY não encontrada."
-        logger.error(error_msg)
+        # ... (código inalterado) ...
         return jsonify({"error": "Configuração do servidor incompleta."}), 500
 
     data = request.get_json()
     if not data:
+        # ... (código inalterado) ...
         return jsonify({"error": "Requisição inválida, corpo JSON ausente."}), 400
 
     text_to_process = data.get('text')
@@ -61,6 +62,7 @@ def generate_audio_endpoint():
     model_nickname = data.get('model_to_use', 'flash')
 
     if not text_to_process or not voice_name:
+        # ... (código inalterado) ...
         return jsonify({"error": "Os campos de texto e voz são obrigatórios."}), 400
 
     try:
@@ -70,19 +72,14 @@ def generate_audio_endpoint():
         client = genai.Client(api_key=api_key)
         
         # --- [INÍCIO DA CORREÇÃO FINAL] ---
-        
         if model_nickname == 'chirp':
-            model_to_use_fullname = "chirp-v3-0" # Nome técnico do modelo Chirp
+            model_to_use_fullname = "chirp-v3-0"
             logger.info(f"Usando modelo Chirp: {model_to_use_fullname}")
             
-            # Chirp usa language_code e não voice_name.
+            # Para Chirp, a API infere o idioma do texto. Não enviamos NENHUMA configuração de voz.
             generate_content_config = types.GenerateContentConfig(
-                response_modalities=["audio"],
-                speech_config=types.SpeechConfig(
-                    voice_config=types.VoiceConfig(
-                        language_code="pt-BR"
-                    )
-                )
+                response_modalities=["audio"]
+                # O speech_config é omitido completamente
             )
         else:
             if model_nickname == 'pro':
