@@ -3,5 +3,4 @@ Flask-Cors
 gunicorn
 google-genai
 google-api-core
-requests
 

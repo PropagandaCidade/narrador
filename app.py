@@ -1,16 +1,18 @@
-# app.py - VERSÃO 11.1 - Corrige o formato do payload para a Vertex AI e o tratamento de erro.
-
+# app.py - VERSÃO FINAL DE PRODUÇÃO (com correção de pronúncia)
 import os
 import io
+import mimetypes
 import struct
 import logging
-import json
-import base64
-import requests
 
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
 
+from google import genai
+from google.genai import types
+from google.api_core import exceptions as google_exceptions
+
+# <-- 1. IMPORTA A NOVA FUNÇÃO DO "CÉREBRO AUXILIAR"
 from text_utils import correct_grammar_for_grams
 
 logging.basicConfig(level=logging.INFO)
@@ -19,9 +21,27 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app, expose_headers=['X-Model-Used'])
 
+def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
+    logger.info(f"Convertendo dados de áudio de {mime_type} para WAV...")
+    bits_per_sample = 16
+    sample_rate = 24000
+    num_channels = 1
+    data_size = len(audio_data)
+    bytes_per_sample = bits_per_sample // 8
+    block_align = num_channels * bytes_per_sample
+    byte_rate = sample_rate * block_align
+    chunk_size = 36 + data_size
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF", chunk_size, b"WAVE", b"fmt ", 16, 1, num_channels,
+        sample_rate, byte_rate, block_align, bits_per_sample, b"data", data_size
+    )
+    logger.info("Conversão para WAV concluída.")
+    return header + audio_data
+
 @app.route('/')
 def home():
-    return "Serviço de Narração v11.1 (Vertex AI Direct) está online."
+    return "Serviço de Narração individual está online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -29,7 +49,9 @@ def generate_audio_endpoint():
     
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        return jsonify({"error": "Configuração do servidor incompleta (API Key)."}), 500
+        error_msg = "ERRO CRÍTICO: GEMINI_API_KEY não encontrada."
+        logger.error(error_msg)
+        return jsonify({"error": "Configuração do servidor incompleta."}), 500
 
     data = request.get_json()
     if not data:
@@ -39,90 +61,63 @@ def generate_audio_endpoint():
     voice_name = data.get('voice')
     model_nickname = data.get('model_to_use', 'flash')
 
-    if not text_to_process:
-        return jsonify({"error": "O campo de texto é obrigatório."}), 400
+    if not text_to_process or not voice_name:
+        return jsonify({"error": "Os campos de texto e voz são obrigatórios."}), 400
 
     try:
-        logger.info("Aplicando pré-processamento de texto...")
+        # <-- 2. APLICA A CORREÇÃO ANTES DE ENVIAR PARA A API
+        logger.info("Aplicando pré-processamento de texto para correção de pronúncia...")
         corrected_text = correct_grammar_for_grams(text_to_process)
-        
+
         if model_nickname == 'pro':
-            model_id = "gemini-2.5-pro-preview-tts"
-        elif model_nickname == 'chirp':
-            model_id = "chirp-v3-0"
-        else: # flash
-            model_id = "gemini-2.5-flash-preview-tts"
+            model_to_use_fullname = "gemini-2.5-pro-preview-tts"
+        else:
+            model_to_use_fullname = "gemini-2.5-flash-preview-tts"
         
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:streamGenerateContent?key={api_key}"
-
-        # --- [INÍCIO DA CORREÇÃO] ---
-        # Payload reestruturado para corresponder ao formato da API para TTS
-        payload = {
-            "model": model_id,
-            "voice": voice_name, # Para Gemini TTS
-            "audio_config": {
-                "audio_encoding": "LINEAR16",
-                "sample_rate_hertz": 24000
-            },
-            "input": {
-                "text": corrected_text
-            }
-        }
+        logger.info(f"Usando modelo: {model_to_use_fullname}")
         
-        # A API Chirp não usa 'voice', mas pode precisar de 'language_code'
-        if model_nickname == 'chirp':
-            del payload['voice'] # Remove o campo de voz que não é usado
-            # A API deve inferir pt-BR do texto
-        # --- [FIM DA CORREÇÃO] ---
+        client = genai.Client(api_key=api_key)
 
-        logger.info(f"Enviando requisição para API com modelo: {model_id}")
-        headers = {"Content-Type": "application/json"}
+        generate_content_config = types.GenerateContentConfig(
+            response_modalities=["audio"],
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name=voice_name
+                    )
+                )
+            )
+        )
         
-        response = requests.post(url, headers=headers, json=payload, stream=True)
-        response.raise_for_status()
-
         audio_data_chunks = []
-        # Processa a resposta em stream
-        for line in response.iter_lines():
-            if line.startswith(b'data: '):
-                json_str = line.decode('utf-8')[6:]
-                try:
-                    chunk_data = json.loads(json_str)
-                    if 'audioContent' in chunk_data:
-                        audio_data_chunks.append(base64.b64decode(chunk_data['audioContent']))
-                except json.JSONDecodeError:
-                    logger.warning(f"Ignorando linha de stream mal formada: {json_str}")
-                    continue
+        # Usa o texto corrigido para gerar o áudio
+        for chunk in client.models.generate_content_stream(
+            model=model_to_use_fullname, contents=corrected_text, config=generate_content_config
+        ):
+            if (chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts and chunk.candidates[0].content.parts[0].inline_data and chunk.candidates[0].content.parts[0].inline_data.data):
+                inline_data = chunk.candidates[0].content.parts[0].inline_data
+                audio_data_chunks.append(inline_data.data)
 
         if not audio_data_chunks:
-             return jsonify({"error": "A API respondeu, mas não retornou dados de áudio válidos."}), 500
+             return jsonify({"error": "A API respondeu, mas não retornou dados de áudio."}), 500
 
         full_audio_data = b''.join(audio_data_chunks)
+        wav_data = convert_to_wav(full_audio_data, inline_data.mime_type)
         
-        http_response = make_response(send_file(io.BytesIO(full_audio_data), mimetype='audio/wav', as_attachment=False))
+        http_response = make_response(send_file(io.BytesIO(wav_data), mimetype='audio/wav', as_attachment=False))
         http_response.headers['X-Model-Used'] = model_nickname
         
         logger.info(f"Sucesso: Áudio WAV gerado e enviado ao cliente.")
         return http_response
 
-    except requests.exceptions.HTTPError as e:
-        # --- [INÍCIO DA CORREÇÃO] ---
-        # Tratamento de erro robusto para diferentes formatos de resposta
-        try:
-            error_details = e.response.json()
-            # Tenta acessar a mensagem de erro no formato esperado
-            error_message = error_details.get('error', {}).get('message', 'Erro desconhecido da API')
-        except json.JSONDecodeError:
-            # Se a resposta de erro não for JSON, usa o texto bruto
-            error_message = e.response.text
-        
-        logger.error(f"Erro HTTP da API: {e.response.status_code} - {error_message}")
-        return jsonify({"error": f"Erro da API: {error_message}"}), 500
-        # --- [FIM DA CORREÇÃO] ---
-        
+    except (google_exceptions.ResourceExhausted, google_exceptions.PermissionDenied, google_exceptions.Unauthenticated, google_exceptions.ClientError) as e:
+        error_message = f"Falha de API que permite nova tentativa: {type(e).__name__}"
+        logger.warning(error_message)
+        return jsonify({"error": error_message, "retryable": True}), 429
+
     except Exception as e:
-        error_message = f"Erro inesperado: {e}"
-        logger.error(f"ERRO CRÍTICO: {error_message}", exc_info=True)
+        error_message = f"Erro inesperado que NÃO permite nova tentativa: {e}"
+        logger.error(f"ERRO CRÍTICO NA API: {error_message}", exc_info=True)
         return jsonify({"error": error_message}), 500
 
 if __name__ == '__main__':
