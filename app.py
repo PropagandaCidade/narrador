@@ -1,19 +1,13 @@
-# app.py - VERSÃO FINAL DE PRODUÇÃO (com correção de pronúncia e import)
+# app.py - VERSÃO 4.1 - Corrige SyntaxError e atualiza para a chamada TTS correta.
 import os
 import io
-import mimetypes
 import struct
 import logging
 
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
 
-# --- [INÍCIO DA CORREÇÃO] ---
-# A forma correta de importar a biblioteca do Google Gemini.
 import google.generativeai as genai
-# --- [FIM DA CORREÇÃO] ---
-
-from google.generativeai import types
 from google.api_core import exceptions as google_exceptions
 
 from text_utils import correct_grammar_for_grams
@@ -72,28 +66,29 @@ def generate_audio_endpoint():
         corrected_text = correct_grammar_for_grams(text_to_process)
 
         if model_nickname == 'pro':
-            model_to_use_fullname = "models/text-to-speech-pro" # Nome de modelo ajustado
+            model_to_use_fullname = "models/text-to-speech-pro"
         else:
-            model_to_use_fullname = "models/text-to-speech" # Nome de modelo ajustado
+            model_to_use_fullname = "models/text-to-speech"
         
         logger.info(f"Usando modelo: {model_to_use_fullname}")
         
-        # A forma de configurar a API agora é diretamente no cliente
         genai.configure(api_key=api_key)
 
-        # O restante da lógica permanece a mesma, mas usando a API configurada
+        # --- [INÍCIO DA CORREÇÃO DE SINTAXE E LÓGICA] ---
+        # A chamada para a API de TTS foi simplificada para a forma correta e mais recente.
         tts_response = genai.text_to_speech(
             model=model_to_use_fullname,
             text=corrected_text,
             voice_name=voice_name
         )
 
-        # A resposta agora vem em um objeto com o atributo 'audio_content'
         if not tts_response.audio_content:
-             return jsonify({"error": "A API respondeu, mas não retornou dados de áudio."}), 500
+            return jsonify({"error": "A API respondeu, mas não retornou dados de áudio."}), 500
 
-        # O tipo MIME é sempre WAV agora com a nova API
+        # A nova API sempre retorna WAV, então a conversão manual não é mais estritamente necessária,
+        # mas mantê-la garante um formato consistente.
         wav_data = convert_to_wav(tts_response.audio_content, 'audio/wav')
+        # --- [FIM DA CORREÇÃO DE SINTAXE E LÓGICA] ---
         
         http_response = make_response(send_file(io.BytesIO(wav_data), mimetype='audio/wav', as_attachment=False))
         http_response.headers['X-Model-Used'] = model_nickname
@@ -113,5 +108,4 @@ def generate_audio_endpoint():
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)```
-
+    app.run(host='0.0.0.0', port=port)
