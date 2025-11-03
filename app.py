@@ -1,4 +1,4 @@
-# app.py - VERSÃO 4.1 - Corrige SyntaxError e atualiza para a chamada TTS correta.
+# app.py - VERSÃO 5.0 - Utiliza a chamada correta 'text_to_speech' com os modelos TTS corretos.
 import os
 import io
 import struct
@@ -18,7 +18,14 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app, expose_headers=['X-Model-Used'])
 
+# A função 'convert_to_wav' não é mais necessária, pois a API já retorna WAV.
+# Mantida por segurança caso o formato mude.
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
+    # Se já for WAV, apenas retorna os dados.
+    if 'wav' in mime_type:
+        logger.info("Dados de áudio já estão no formato WAV.")
+        return audio_data
+        
     logger.info(f"Convertendo dados de áudio de {mime_type} para WAV...")
     bits_per_sample = 16
     sample_rate = 24000
@@ -62,9 +69,10 @@ def generate_audio_endpoint():
         return jsonify({"error": "Os campos de texto e voz são obrigatórios."}), 400
 
     try:
-        logger.info("Aplicando pré-processamento de texto para correção de pronúncia...")
+        logger.info("Aplicando pré-processamento de texto...")
         corrected_text = correct_grammar_for_grams(text_to_process)
 
+        # --- [CORREÇÃO] Usando os nomes de modelo TTS corretos que você forneceu ---
         if model_nickname == 'pro':
             model_to_use_fullname = "models/text-to-speech-pro"
         else:
@@ -72,10 +80,10 @@ def generate_audio_endpoint():
         
         logger.info(f"Usando modelo: {model_to_use_fullname}")
         
+        # Configura a API key
         genai.configure(api_key=api_key)
 
-        # --- [INÍCIO DA CORREÇÃO DE SINTAXE E LÓGICA] ---
-        # A chamada para a API de TTS foi simplificada para a forma correta e mais recente.
+        # --- [CORREÇÃO] Usando o método text_to_speech, que é o correto para esta tarefa ---
         tts_response = genai.text_to_speech(
             model=model_to_use_fullname,
             text=corrected_text,
@@ -85,10 +93,8 @@ def generate_audio_endpoint():
         if not tts_response.audio_content:
             return jsonify({"error": "A API respondeu, mas não retornou dados de áudio."}), 500
 
-        # A nova API sempre retorna WAV, então a conversão manual não é mais estritamente necessária,
-        # mas mantê-la garante um formato consistente.
-        wav_data = convert_to_wav(tts_response.audio_content, 'audio/wav')
-        # --- [FIM DA CORREÇÃO DE SINTAXE E LÓGICA] ---
+        # A API retorna WAV, então a conversão é apenas uma salvaguarda.
+        wav_data = tts_response.audio_content
         
         http_response = make_response(send_file(io.BytesIO(wav_data), mimetype='audio/wav', as_attachment=False))
         http_response.headers['X-Model-Used'] = model_nickname
