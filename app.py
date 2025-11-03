@@ -1,4 +1,4 @@
-# app.py - VERSÃO 9.2 - Remove o parâmetro 'language_code' da chamada Chirp.
+# app.py - VERSÃO 9.3 - CORREÇÃO FINAL dos nomes de modelo.
 
 import os
 import io
@@ -40,7 +40,7 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
 
 @app.route('/')
 def home():
-    return "Serviço de Narração v9.2 está online."
+    return "Serviço de Narração v9.3 está online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -69,41 +69,28 @@ def generate_audio_endpoint():
         
         client = genai.Client(api_key=api_key)
         
-        # --- [INÍCIO DA CORREÇÃO] ---
-        if model_nickname == 'chirp':
-            model_to_use_fullname = "chirp-tts-3"
-            logger.info(f"Usando modelo Chirp: {model_to_use_fullname}")
-            
-            # Para Chirp, a API NÃO ACEITA 'language_code'.
-            # A voz já define o idioma. A configuração de voz é vazia ou usa outros parâmetros se necessário.
-            generate_content_config = types.GenerateContentConfig(
-                response_modalities=["audio"],
-                speech_config=types.SpeechConfig(
-                    voice_config=types.VoiceConfig(
-                        # A voz é passada implicitamente pelo modelo ou texto,
-                        # então deixamos a configuração de voz vazia.
+        # --- [INÍCIO DA CORREÇÃO FINAL] ---
+        # Mapeando os nicknames do frontend para os NOMES REAIS E CORRETOS da API
+        if model_nickname == 'pro' or model_nickname == 'chirp':
+            # "Chirp 3 HD" e "Pro" usarão o melhor modelo disponível.
+            model_to_use_fullname = "gemini-2.5-pro-preview-tts"
+        else: # 'flash' é o padrão
+            model_to_use_fullname = "gemini-2.5-flash-preview-tts"
+        
+        logger.info(f"Nickname recebido: '{model_nickname}'. Usando modelo real: '{model_to_use_fullname}'")
+        
+        # A configuração para os modelos Gemini TTS usa prebuilt_voice_config
+        generate_content_config = types.GenerateContentConfig(
+            response_modalities=["audio"],
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name=voice_name
                     )
                 )
             )
-        else:
-            if model_nickname == 'pro':
-                model_to_use_fullname = "gemini-2.5-pro-preview-tts"
-            else:
-                model_to_use_fullname = "gemini-2.5-flash-preview-tts"
-            
-            logger.info(f"Usando modelo Gemini: {model_to_use_fullname}")
-            
-            generate_content_config = types.GenerateContentConfig(
-                response_modalities=["audio"],
-                speech_config=types.SpeechConfig(
-                    voice_config=types.VoiceConfig(
-                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                            voice_name=voice_name
-                        )
-                    )
-                )
-            )
-        # --- [FIM DA CORREÇÃO] ---
+        )
+        # --- [FIM DA CORREÇÃO FINAL] ---
         
         audio_data_chunks = []
         for chunk in client.models.generate_content_stream(
@@ -126,7 +113,7 @@ def generate_audio_endpoint():
         return http_response
 
     except (google_exceptions.ResourceExhausted, google_exceptions.PermissionDenied, google_exceptions.Unauthenticated, google_exceptions.ClientError) as e:
-        error_message = f"Falha de API que permite nova tentativa: {type(e).__name__}"
+        error_message = f"Falha de API que permite nova tentativa: {type(e).__name__} - {e}"
         logger.warning(error_message)
         return jsonify({"error": error_message, "retryable": True}), 429
 
