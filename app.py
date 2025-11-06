@@ -1,7 +1,7 @@
-# app.py - VERSÃO FINAL DE PRODUÇÃO (com correção de pronúncia)
+# app.py - VERSÃO 15.2 - Adiciona truncamento de segurança no texto de entrada.
+
 import os
 import io
-import mimetypes
 import struct
 import logging
 
@@ -12,7 +12,6 @@ from google import genai
 from google.genai import types
 from google.api_core import exceptions as google_exceptions
 
-# <-- 1. IMPORTA A NOVA FUNÇÃO DO "CÉREBRO AUXILIAR"
 from text_utils import correct_grammar_for_grams
 
 logging.basicConfig(level=logging.INFO)
@@ -41,34 +40,46 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
 
 @app.route('/')
 def home():
-    return "Serviço de Narração individual está online."
+    return "Serviço de Narração Unificado v15.2 está online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
     logger.info("Recebendo solicitação para /api/generate-audio")
     
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        error_msg = "ERRO CRÍTICO: GEMINI_API_KEY não encontrada."
-        logger.error(error_msg)
-        return jsonify({"error": "Configuração do servidor incompleta."}), 500
-
     data = request.get_json()
     if not data:
         return jsonify({"error": "Requisição inválida, corpo JSON ausente."}), 400
+
+    api_key = data.get('api_key')
+    if not api_key:
+        error_msg = "ERRO CRÍTICO: Chave de API não foi fornecida no payload."
+        logger.error(error_msg)
+        return jsonify({"error": "Configuração de autenticação incompleta."}), 500
 
     text_to_process = data.get('text')
     voice_name = data.get('voice')
     model_nickname = data.get('model_to_use', 'flash')
 
+    if model_nickname == 'chirp':
+        model_nickname = 'pro'
+
     if not text_to_process or not voice_name:
         return jsonify({"error": "Os campos de texto e voz são obrigatórios."}), 400
 
     try:
-        # <-- 2. APLICA A CORREÇÃO ANTES DE ENVIAR PARA A API
+        # Define um limite de segurança de caracteres para a entrada da API TTS
+        INPUT_CHAR_LIMIT = 3000
+
+        # Trunca o texto se ele exceder o limite
+        if len(text_to_process) > INPUT_CHAR_LIMIT:
+            logger.warning(f"Texto de entrada ({len(text_to_process)} chars) excedeu o limite de {INPUT_CHAR_LIMIT}. O texto será truncado.")
+            text_to_process = text_to_process[:INPUT_CHAR_LIMIT]
+
         logger.info("Aplicando pré-processamento de texto para correção de pronúncia...")
         corrected_text = correct_grammar_for_grams(text_to_process)
-
+        
+        client = genai.Client(api_key=api_key)
+        
         if model_nickname == 'pro':
             model_to_use_fullname = "gemini-2.5-pro-preview-tts"
         else:
@@ -76,10 +87,9 @@ def generate_audio_endpoint():
         
         logger.info(f"Usando modelo: {model_to_use_fullname}")
         
-        client = genai.Client(api_key=api_key)
-
         generate_content_config = types.GenerateContentConfig(
             response_modalities=["audio"],
+            max_output_tokens=8192,
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(
@@ -90,7 +100,6 @@ def generate_audio_endpoint():
         )
         
         audio_data_chunks = []
-        # Usa o texto corrigido para gerar o áudio
         for chunk in client.models.generate_content_stream(
             model=model_to_use_fullname, contents=corrected_text, config=generate_content_config
         ):
@@ -110,10 +119,15 @@ def generate_audio_endpoint():
         logger.info(f"Sucesso: Áudio WAV gerado e enviado ao cliente.")
         return http_response
 
-    except (google_exceptions.ResourceExhausted, google_exceptions.PermissionDenied, google_exceptions.Unauthenticated, google_exceptions.ClientError) as e:
-        error_message = f"Falha de API que permite nova tentativa: {type(e).__name__}"
+    except google_exceptions.ResourceExhausted as e:
+        error_message = f"Cota da API esgotada: {e}"
         logger.warning(error_message)
         return jsonify({"error": error_message, "retryable": True}), 429
+
+    except (google_exceptions.PermissionDenied, google_exceptions.Unauthenticated, google_exceptions.ClientError) as e:
+        error_message = f"Falha de API que NÃO permite nova tentativa: {type(e).__name__} - {e}"
+        logger.warning(error_message)
+        return jsonify({"error": error_message, "retryable": False}), 403
 
     except Exception as e:
         error_message = f"Erro inesperado que NÃO permite nova tentativa: {e}"
