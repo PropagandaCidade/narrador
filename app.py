@@ -1,4 +1,4 @@
-# app.py - VERSÃO 15.3 - FINAL. Lê a chave do ambiente e trunca o texto.
+# app.py - VERSÃO 15.3.1 - Corrige o SyntaxError final.
 
 import os
 import io
@@ -41,20 +41,17 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
 
 @app.route('/')
 def home():
-    return "Serviço de Narração Unificado v15.3 está online."
+    return "Serviço de Narração Unificado v15.3.1 está online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
     logger.info("Recebendo solicitação para /api/generate-audio")
     
-    # --- [CORREÇÃO] ---
-    # A chave de API volta a ser lida do ambiente do Railway, como na sua arquitetura original.
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         error_msg = "ERRO CRÍTICO: GEMINI_API_KEY não encontrada no ambiente do Railway."
         logger.error(error_msg)
         return jsonify({"error": "Configuração do servidor incompleta."}), 500
-    # --- [FIM DA CORREÇÃO] ---
 
     data = request.get_json()
     if not data:
@@ -64,11 +61,13 @@ def generate_audio_endpoint():
     voice_name = data.get('voice')
     model_nickname = data.get('model_to_use', 'flash')
 
+    if model_nickname == 'chirp':
+        model_nickname = 'pro'
+
     if not text_to_process or not voice_name:
         return jsonify({"error": "Os campos de texto e voz são obrigatórios."}), 400
 
     try:
-        # Lógica de truncamento para evitar áudios cortados
         INPUT_CHAR_LIMIT = 3000
         if len(text_to_process) > INPUT_CHAR_LIMIT:
             logger.warning(f"Texto de entrada ({len(text_to_process)} chars) excedeu o limite de {INPUT_CHAR_LIMIT}. O texto será truncado.")
@@ -88,7 +87,7 @@ def generate_audio_endpoint():
 
         generate_content_config = types.GenerateContentConfig(
             response_modalities=["audio"],
-            max_output_tokens=8192, # Mantém a segurança para áudios longos
+            max_output_tokens=8192,
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(
@@ -135,5 +134,4 @@ def generate_audio_endpoint():
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)```
-
+    app.run(host='0.0.0.0', port=port)
