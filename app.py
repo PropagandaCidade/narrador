@@ -1,4 +1,5 @@
-# app.py - VERSÃO 15.2 - Corrige problema de áudio cortado para textos longos.
+# app.py - VERSÃO 15.3 - FINAL. Lê a chave do ambiente e trunca o texto.
+
 import os
 import io
 import mimetypes
@@ -40,22 +41,24 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
 
 @app.route('/')
 def home():
-    return "Serviço de Narração Unificado v15.2 está online."
+    return "Serviço de Narração Unificado v15.3 está online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
     logger.info("Recebendo solicitação para /api/generate-audio")
     
-    # [CORREÇÃO] A chave de API agora é lida do PAYLOAD, não mais do ambiente.
+    # --- [CORREÇÃO] ---
+    # A chave de API volta a ser lida do ambiente do Railway, como na sua arquitetura original.
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        error_msg = "ERRO CRÍTICO: GEMINI_API_KEY não encontrada no ambiente do Railway."
+        logger.error(error_msg)
+        return jsonify({"error": "Configuração do servidor incompleta."}), 500
+    # --- [FIM DA CORREÇÃO] ---
+
     data = request.get_json()
     if not data:
         return jsonify({"error": "Requisição inválida, corpo JSON ausente."}), 400
-
-    api_key = data.get('api_key')
-    if not api_key:
-        error_msg = "ERRO CRÍTICO: Chave de API não foi fornecida no payload pelo roteador."
-        logger.error(error_msg)
-        return jsonify({"error": "Configuração de autenticação incompleta."}), 500
 
     text_to_process = data.get('text')
     voice_name = data.get('voice')
@@ -65,12 +68,11 @@ def generate_audio_endpoint():
         return jsonify({"error": "Os campos de texto e voz são obrigatórios."}), 400
 
     try:
-        # --- [INÍCIO DA LÓGICA DE TRUNCAMENTO] ---
+        # Lógica de truncamento para evitar áudios cortados
         INPUT_CHAR_LIMIT = 3000
         if len(text_to_process) > INPUT_CHAR_LIMIT:
             logger.warning(f"Texto de entrada ({len(text_to_process)} chars) excedeu o limite de {INPUT_CHAR_LIMIT}. O texto será truncado.")
             text_to_process = text_to_process[:INPUT_CHAR_LIMIT]
-        # --- [FIM DA LÓGICA DE TRUNCAMENTO] ---
 
         logger.info("Aplicando pré-processamento de texto para correção de pronúncia...")
         corrected_text = correct_grammar_for_grams(text_to_process)
@@ -84,10 +86,9 @@ def generate_audio_endpoint():
         
         client = genai.Client(api_key=api_key)
 
-        # --- [INÍCIO DA LÓGICA DE AUMENTO DE TOKENS] ---
         generate_content_config = types.GenerateContentConfig(
             response_modalities=["audio"],
-            max_output_tokens=8192,  # Permite que a resposta de áudio seja longa
+            max_output_tokens=8192, # Mantém a segurança para áudios longos
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(
@@ -96,7 +97,6 @@ def generate_audio_endpoint():
                 )
             )
         )
-        # --- [FIM DA LÓGICA DE AUMENTO DE TOKENS] ---
         
         audio_data_chunks = []
         for chunk in client.models.generate_content_stream(
@@ -107,8 +107,7 @@ def generate_audio_endpoint():
                 audio_data_chunks.append(inline_data.data)
 
         if not audio_data_chunks:
-             # Retorna uma mensagem mais clara se a API retornar vazio (pode ser MAX_TOKENS de entrada)
-             return jsonify({"error": "A API respondeu, mas não retornou dados de áudio. O texto pode ter excedido o limite de entrada da API."}), 500
+             return jsonify({"error": "A API respondeu, mas não retornou dados de áudio."}), 500
 
         full_audio_data = b''.join(audio_data_chunks)
         wav_data = convert_to_wav(full_audio_data, inline_data.mime_type)
@@ -136,4 +135,5 @@ def generate_audio_endpoint():
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port)```
+
