@@ -1,4 +1,4 @@
-# app.py - VERSÃO 15.3.1 - Corrige o SyntaxError final.
+# app.py - VERSÃO 15.3.1 - Com linha de diagnóstico para a chave de API.
 
 import os
 import io
@@ -48,6 +48,11 @@ def generate_audio_endpoint():
     logger.info("Recebendo solicitação para /api/generate-audio")
     
     api_key = os.environ.get("GEMINI_API_KEY")
+
+    # --- LINHA DE DIAGNÓSTICO ADICIONADA ---
+    # Esta linha irá mostrar nos logs do Railway os primeiros 5 e os últimos 4 caracteres da chave que o app está usando.
+    logger.info(f"Chave de API carregada: Inicia com '{str(api_key)[:5]}' e termina com '{str(api_key)[-4:]}'")
+
     if not api_key:
         error_msg = "ERRO CRÍTICO: GEMINI_API_KEY não encontrada no ambiente do Railway."
         logger.error(error_msg)
