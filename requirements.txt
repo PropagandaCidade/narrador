@@ -1,5 +1,3 @@
-# requirements.txt - Atualizado para suportar conversão MP3 Mono
-
 Flask
 Flask-Cors
 gunicorn
