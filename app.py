@@ -1,4 +1,4 @@
-# app.py - VERSÃO 17.0.0 - Otimização final para MP3 MONO com pydub.
+# app.py - VERSÃO 17.0.1 - Corrige o AttributeError 'genai.configure'
 
 import os
 import io
@@ -7,9 +7,8 @@ from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
 
 # Importações necessárias
-from google import genai
-from google.api_core import exceptions as google_exceptions
-from pydub import AudioSegment # Importa a biblioteca para manipulação de áudio
+from google.cloud import texttospeech # Usamos a biblioteca específica de TTS
+from pydub import AudioSegment # Para manipulação de áudio
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -19,25 +18,23 @@ CORS(app, expose_headers=['X-Model-Used'])
 
 @app.route('/')
 def home():
-    return "Serviço de Narração Unificado v17.0.0 (Otimizado para MP3 Mono) está online."
+    return "Serviço de Narração Unificado v17.0.1 (Otimizado para MP3 Mono) está online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
     logger.info("Recebendo solicitação para /api/generate-audio")
     
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        error_msg = "ERRO CRÍTICO: GEMINI_API_KEY não encontrada no ambiente do Railway."
-        logger.error(error_msg)
-        return jsonify({"error": "Configuração do servidor incompleta."}), 500
-
+    # A autenticação agora é gerenciada automaticamente pela biblioteca google-cloud
+    # se as credenciais estiverem no ambiente (o que o Railway faz).
+    # A variável GEMINI_API_KEY não é mais usada diretamente aqui.
+    
     data = request.get_json()
     if not data:
         return jsonify({"error": "Requisição inválida, corpo JSON ausente."}), 400
 
     text_to_process = data.get('text')
     voice_name = data.get('voice') # Ex: 'pt-BR-Standard-A'
-    model_nickname = data.get('model_to_use', 'flash')
+    model_nickname = data.get('model_to_use', 'flash') # Mantido para consistência
     
     if not text_to_process or not voice_name:
         return jsonify({"error": "Os campos de texto e voz são obrigatórios."}), 400
@@ -49,11 +46,7 @@ def generate_audio_endpoint():
         text_to_process = text_to_process[:CHAR_LIMIT]
 
     try:
-        genai.configure(api_key=api_key)
-        
-        # A API do Gemini usa a API Text-to-Speech por baixo.
-        # Vamos usar a chamada direta para ter mais controle.
-        from google.cloud import texttospeech
+        # Inicializa o cliente da API Text-to-Speech
         client = texttospeech.TextToSpeechClient()
 
         synthesis_input = texttospeech.SynthesisInput(text=text_to_process)
@@ -63,7 +56,6 @@ def generate_audio_endpoint():
             language_code="pt-BR", name=voice_name
         )
         
-        # --- [INÍCIO DA MUDANÇA PARA MP3 MONO] ---
         # Solicitamos o áudio em WAV (LINEAR16) para ter a fonte de maior qualidade
         # e depois convertemos para MP3 com as configurações exatas que queremos.
         audio_config = texttospeech.AudioConfig(
@@ -94,7 +86,6 @@ def generate_audio_endpoint():
             mimetype='audio/mpeg',  # Mimetype correto para MP3
             as_attachment=False
         ))
-        # --- [FIM DA MUDANÇA PARA MP3 MONO] ---
         
         http_response.headers['X-Model-Used'] = model_nickname
         
