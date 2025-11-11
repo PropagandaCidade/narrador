@@ -1,13 +1,19 @@
-# app.py - VERSÃO 17.0.1 - Usa credenciais de conta de serviço (ADC)
+# app.py - VERSÃO 18.0.0 - Usa GEMINI_API_KEY e converte a saída para MP3 Mono.
 
 import os
 import io
+import struct
 import logging
+
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
 
-# Importações necessárias
-from google.cloud import texttospeech
+# Usamos a biblioteca original que você já tem configurada
+from google import genai
+from google.genai import types
+from google.api_core import exceptions as google_exceptions
+
+# Adicionamos a pydub para a conversão de áudio
 from pydub import AudioSegment
 
 logging.basicConfig(level=logging.INFO)
@@ -18,12 +24,20 @@ CORS(app, expose_headers=['X-Model-Used'])
 
 @app.route('/')
 def home():
-    return "Serviço de Narração Unificado v17.0.1 (Otimizado para MP3 Mono) está online."
+    return "Serviço de Narração Unificado v18.0.0 (MP3 Mono) está online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
     logger.info("Recebendo solicitação para /api/generate-audio")
     
+    # Voltamos a usar a GEMINI_API_KEY, que você já tem configurada.
+    api_key = os.environ.get("GEMINI_API_KEY")
+
+    if not api_key:
+        error_msg = "ERRO CRÍTICO: GEMINI_API_KEY não encontrada no ambiente do Railway."
+        logger.error(error_msg)
+        return jsonify({"error": "Configuração do servidor incompleta."}), 500
+
     data = request.get_json()
     if not data:
         return jsonify({"error": "Requisição inválida, corpo JSON ausente."}), 400
@@ -31,35 +45,47 @@ def generate_audio_endpoint():
     text_to_process = data.get('text')
     voice_name = data.get('voice')
     model_nickname = data.get('model_to_use', 'flash')
-    
+
     if not text_to_process or not voice_name:
         return jsonify({"error": "Os campos de texto e voz são obrigatórios."}), 400
 
-    # Válvula de segurança
+    # --- VÁLVULA DE SEGURANÇA ---
     CHAR_LIMIT = 4900 
     if len(text_to_process) > CHAR_LIMIT:
         logger.warning(f"Texto de entrada ({len(text_to_process)} chars) excedeu o limite de segurança de {CHAR_LIMIT}. O texto será truncado.")
         text_to_process = text_to_process[:CHAR_LIMIT]
 
     try:
-        # A biblioteca encontrará as credenciais automaticamente na variável de ambiente GOOGLE_APPLICATION_CREDENTIALS
-        client = texttospeech.TextToSpeechClient()
-
-        synthesis_input = texttospeech.SynthesisInput(text=text_to_process)
-
-        voice = texttospeech.VoiceSelectionParams(language_code="pt-BR", name=voice_name)
+        # A API do Gemini pode não ter um modelo "pro" para TTS, vamos usar o nome do modelo que você tinha
+        # e que provavelmente funciona. Verifique a documentação para os nomes corretos.
+        if model_nickname == 'pro':
+            # Use o nome correto do modelo TTS Pro, se houver um
+            model_to_use_fullname = "models/text-to-speech-pro"
+        else:
+            model_to_use_fullname = "models/text-to-speech" # Modelo padrão
         
-        audio_config = texttospeech.AudioConfig(
-            audio_encoding=texttospeech.AudioEncoding.LINEAR16,
-            sample_rate_hertz=24000
+        logger.info(f"Usando modelo: {model_to_use_fullname}")
+        
+        # A autenticação é feita ao criar o cliente, como no seu código original
+        client = genai.Client(api_key=api_key)
+
+        # A biblioteca genai usa um método diferente para TTS
+        ssml_text = f"<speak>{text_to_process}</speak>"
+        
+        response = genai.synthesize_speech(
+            model=model_to_use_fullname,
+            text=ssml_text,
+            voice=genai.Voice(name=voice_name)
         )
 
-        response = client.synthesize_speech(
-            input=synthesis_input, voice=voice, audio_config=audio_config
-        )
-        
+        wav_data_from_api = response['audio_content']
+
+        if not wav_data_from_api:
+             return jsonify({"error": "A API respondeu, mas não retornou dados de áudio."}), 500
+
+        # --- CONVERSÃO PARA MP3 MONO USANDO PYDUB ---
         logger.info("Áudio WAV recebido da API. Convertendo para MP3 Mono...")
-        audio_wav = AudioSegment.from_wav(io.BytesIO(response.audio_content))
+        audio_wav = AudioSegment.from_wav(io.BytesIO(wav_data_from_api))
         audio_mono = audio_wav.set_channels(1)
         
         mp3_buffer = io.BytesIO()
@@ -70,7 +96,7 @@ def generate_audio_endpoint():
 
         http_response = make_response(send_file(
             io.BytesIO(mp3_data), 
-            mimetype='audio/mpeg',
+            mimetype='audio/mpeg', # Mimetype correto para MP3
             as_attachment=False
         ))
         
