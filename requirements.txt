@@ -1,7 +1,9 @@
+# requirements.txt - Atualizado para suportar conversão MP3 Mono e workers gevent
+
 Flask
 Flask-Cors
 gunicorn
 google-genai
 google-api-core
-google-cloud-texttospeech
 pydub
+gevent
