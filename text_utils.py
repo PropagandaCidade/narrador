@@ -1,55 +1,42 @@
 # text_utils.py
-# -------------------------------------------------
-# "Cérebro Auxiliar" de Processamento de Texto para o Serviço de Narração.
-# Garante a pronúncia correta de termos gramaticalmente ambíguos.
-# VERSÃO 2.0 - Adiciona normalização para preços, porcentagens e outros símbolos.
-# -------------------------------------------------
+# VERSÃO: 3.0 (Simplificado)
+# DESCRIÇÃO: Este arquivo foi neutralizado. A lógica de normalização de texto
+# foi centralizada no 'TextNormalizer.php' da aplicação principal.
+# Este script agora apenas repassa o texto sem modificações para evitar conflitos.
 
 import re
+from typing import Set
 
 def correct_grammar_for_grams(text: str) -> str:
     """
-    Normaliza o texto para o TTS, forçando a pronúncia correta de "gramas",
-    preços, porcentagens e outros símbolos ambíguos.
+    NEUTRALIZADO: Esta função não faz mais correções gramaticais.
+    Apenas retorna o texto original.
     """
-    
-    # --- [INÍCIO DA LÓGICA ORIGINAL PRESERVADA] ---
-    # Mapeamento para ambiguidade de gênero com "gramas".
-    number_to_masculine_word = {
-        '2': 'dois', '200': 'duzentos', '300': 'trezentos', '400': 'quatrocentos',
-        '500': 'quinhentos', '600': 'seiscentos', '700': 'setecentos',
-        '800': 'oitocentos', '900': 'novecentos',
-    }
-    
-    pattern = re.compile(r"\b(" + "|".join(number_to_masculine_word.keys()) + r")\s+(gramas?)\b", re.IGNORECASE)
+    return text
 
-    def repl_func(match):
-        number_digit = match.group(1)
-        unit_word = match.group(2)
-        return f"{number_to_masculine_word[number_digit]} {unit_word}"
+def normalize_text(text: str) -> str:
+    """
+    NEUTRALIZADO: Esta função não faz mais normalizações de símbolos.
+    Apenas retorna o texto original.
+    """
+    return text
 
-    processed_text = pattern.sub(repl_func, text)
-    # --- [FIM DA LÓGICA ORIGINAL PRESERVADA] ---
+def whitelist_tags_only(s: str, allowed_names: Set[str]) -> str:
+    """
+    (FUNÇÃO MANTIDA) Remove quaisquer tags que não estejam na lista de permissão como uma medida de segurança.
+    """
+    if not allowed_names:
+        # Se não há tags permitidas, remove todas.
+        return re.sub(r"<[^>]+>", "", s)
 
+    def _repl(m: re.Match) -> str:
+        # Extrai o nome da tag, removendo a barra inicial se for uma tag de fechamento
+        tag_content = m.group(1)
+        tag_name = tag_content.split()[0].lstrip('/')
+        return m.group(0) if tag_name in allowed_names else ""
 
-    # --- [INÍCIO DA NOVA LÓGICA DE NORMALIZAÇÃO] ---
-    # As regras são aplicadas em sequência no texto já processado.
-    
-    # Converte R$ 19,90 para "19 reais e 90 centavos"
-    processed_text = re.sub(r'R\$\s*(\d+),(\d{2})', r'\1 reais e \2 centavos', processed_text)
-    
-    # Converte 19,90 (sem R$) para "19 vírgula 90" (para evitar erros de leitura)
-    processed_text = re.sub(r'(\d+),(\d+)', r'\1 vírgula \2', processed_text)
-    
-    # Converte 50% para "50 por cento"
-    processed_text = re.sub(r'(\d+)%', r'\1 por cento', processed_text)
-    
-    # Remove ou substitui caracteres que podem confundir a IA
-    processed_text = processed_text.replace('*', ' ')
-    processed_text = processed_text.replace('-', ' ') # Evita pausas estranhas
-    
-    # Garante que não haja espaços duplos resultantes das substituições
-    processed_text = re.sub(r'\s+', ' ', processed_text).strip()
-    # --- [FIM DA NOVA LÓGICA DE NORMALIZAÇÃO] ---
-    
-    return processed_text
+    # Padrão aprimorado para capturar o nome da tag corretamente
+    return re.sub(r"<(/?[a-zA-Z0-9_]+(?: [^>]+)?)>", _repl, s)
+
+# Você pode adicionar um alias para a função principal, se seu app.py a chamar
+process_text = normalize_text
