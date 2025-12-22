@@ -1,7 +1,4 @@
-# app.py - VERSÃO 20.2 - A CORREÇÃO CIRÚRGICA
-# DESCRIÇÃO: Usa a lógica de API original (v19.0.3) que já funcionava e os nomes de modelo corretos.
-# A única alteração é a REMOÇÃO COMPLETA da chamada para o text_utils.py.
-# Esta é a implementação final da arquitetura de "Fonte Única da Verdade".
+# app.py - VERSÃO 19.0.3 - Usa a função de normalização correta e combinada do text_utils.py.
 
 import os
 import io
@@ -17,7 +14,7 @@ from google.api_core import exceptions as google_exceptions
 from pydub import AudioSegment
 
 # --- [INÍCIO DA CORREÇÃO] ---
-# A linha que importava 'text_utils' foi REMOVIDA.
+# Importamos a sua função original, que agora contém toda a lógica de normalização.
 # --- [FIM DA CORREÇÃO] ---
 
 logging.basicConfig(level=logging.INFO)
@@ -28,7 +25,7 @@ CORS(app, expose_headers=['X-Model-Used'])
 
 @app.route('/')
 def home():
-    return "Serviço de Narração Unificado v20.2 (Arquitetura Final Corrigida) está online."
+    return "Serviço de Narração Unificado v19.0.3 (com normalização aprimorada) está online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -44,27 +41,26 @@ def generate_audio_endpoint():
     data = request.get_json()
     if not data: return jsonify({"error": "Requisição inválida."}), 400
 
-    # O texto do PHP agora é a nossa verdade absoluta.
-    final_text_from_php = data.get('text')
+    text_to_process = data.get('text')
     voice_name = data.get('voice')
     model_nickname = data.get('model_to_use', 'flash')
 
-    if not final_text_from_php or not voice_name:
+    if not text_to_process or not voice_name:
         return jsonify({"error": "Texto e voz são obrigatórios."}), 400
 
     try:
         INPUT_CHAR_LIMIT = 4900
-        if len(final_text_from_php) > INPUT_CHAR_LIMIT:
-            logger.warning(f"Texto de entrada ({len(final_text_from_php)} chars) excedeu o limite. O texto será truncado.")
-            final_text_from_php = final_text_from_php[:INPUT_CHAR_LIMIT]
+        if len(text_to_process) > INPUT_CHAR_LIMIT:
+            logger.warning(f"Texto de entrada ({len(text_to_process)} chars) excedeu o limite. O texto será truncado.")
+            text_to_process = text_to_process[:INPUT_CHAR_LIMIT]
 
         # --- [INÍCIO DA CORREÇÃO] ---
-        logger.info(f"Texto final (confiado 100% do PHP): '{final_text_from_php[:150]}...'")
-        # A chamada para 'correct_grammar_for_grams' foi REMOVIDA.
-        # Usamos a variável 'final_text_from_php' diretamente.
+        logger.info(f"Texto original recebido: '{text_to_process[:100]}...'")
+        # Usamos a função correta, que agora faz todo o trabalho de normalização.
+        corrected_text = correct_grammar_for_grams(text_to_process)
+        logger.info(f"Texto normalizado para TTS: '{corrected_text[:100]}...'")
         # --- [FIM DA CORREÇÃO] ---
 
-        # Usando os nomes de modelo corretos que você forneceu.
         if model_nickname == 'pro':
             model_to_use_fullname = "gemini-2.5-pro-preview-tts"
         else:
@@ -75,8 +71,8 @@ def generate_audio_endpoint():
         client = genai.Client(api_key=api_key)
 
         generate_content_config = types.GenerateContentConfig(
-            # O parâmetro 'response_modalities' é necessário para este método de chamada.
             response_modalities=["audio"],
+            max_output_tokens=8192,
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(
@@ -88,9 +84,7 @@ def generate_audio_endpoint():
         
         audio_data_chunks = []
         for chunk in client.models.generate_content_stream(
-            model=model_to_use_fullname,
-            contents=final_text_from_php, # Usando o texto final do PHP
-            config=generate_content_config
+            model=model_to_use_fullname, contents=corrected_text, config=generate_content_config
         ):
             if (chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts and chunk.candidates[0].content.parts[0].inline_data and chunk.candidates[0].content.parts[0].inline_data.data):
                 audio_data_chunks.append(chunk.candidates[0].content.parts[0].inline_data.data)
@@ -121,5 +115,5 @@ def generate_audio_endpoint():
         return jsonify({"error": error_message}), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 8080))
+    port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
