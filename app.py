@@ -1,4 +1,8 @@
-# app.py - VERSÃO 19.0.3 - Usa a função de normalização correta e combinada do text_utils.py.
+# app.py - VERSÃO 20.0 - ARQUITETURA FINAL
+# DESCRIÇÃO: Esta versão implementa a arquitetura de "Fonte Única da Verdade".
+# A dependência do 'text_utils.py' foi COMPLETAMENTE REMOVIDA.
+# O script agora confia 100% no texto já normalizado que recebe do TextNormalizer.php
+# e atua apenas como um conector para a API de TTS.
 
 import os
 import io
@@ -13,67 +17,61 @@ from google.api_core import exceptions as google_exceptions
 
 from pydub import AudioSegment
 
-# --- [INÍCIO DA CORREÇÃO] ---
-# Importamos a sua função original, que agora contém toda a lógica de normalização.
-from text_utils import correct_grammar_for_grams
-# --- [FIM DA CORREÇÃO] ---
-
+# Configuração do logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Inicialização do Flask App
 app = Flask(__name__)
 CORS(app, expose_headers=['X-Model-Used'])
 
 @app.route('/')
 def home():
-    return "Serviço de Narração Unificado v19.0.3 (com normalização aprimorada) está online."
+    # Mensagem de status clara que reflete a nova arquitetura
+    return "Serviço de Narração v20.0 (Arquitetura Simplificada - Fonte da Verdade PHP) está online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
     logger.info("Recebendo solicitação para /api/generate-audio")
     
+    # 1. Validação da API Key e dos dados de entrada
     api_key = os.environ.get("GEMINI_API_KEY")
-
     if not api_key:
         error_msg = "ERRO CRÍTICO: GEMINI_API_KEY não encontrada no ambiente."
         logger.error(error_msg)
         return jsonify({"error": "Configuração do servidor incompleta."}), 500
 
     data = request.get_json()
-    if not data: return jsonify({"error": "Requisição inválida."}), 400
+    if not data:
+        return jsonify({"error": "Requisição inválida (corpo JSON ausente)."}), 400
 
-    text_to_process = data.get('text')
+    # O texto recebido já está 100% normalizado pelo PHP
+    final_text_from_php = data.get('text')
     voice_name = data.get('voice')
-    model_nickname = data.get('model_to_use', 'flash')
+    model_nickname = data.get('model_to_use', 'flash') # 'flash' como padrão
 
-    if not text_to_process or not voice_name:
-        return jsonify({"error": "Texto e voz são obrigatórios."}), 400
+    if not final_text_from_php or not voice_name:
+        return jsonify({"error": "Os campos 'text' e 'voice' são obrigatórios."}), 400
 
     try:
-        INPUT_CHAR_LIMIT = 4900
-        if len(text_to_process) > INPUT_CHAR_LIMIT:
-            logger.warning(f"Texto de entrada ({len(text_to_process)} chars) excedeu o limite. O texto será truncado.")
-            text_to_process = text_to_process[:INPUT_CHAR_LIMIT]
+        # 2. Limite de segurança de caracteres (boa prática)
+        INPUT_CHAR_LIMIT = 4950 # Limite seguro para a API
+        if len(final_text_from_php) > INPUT_CHAR_LIMIT:
+            logger.warning(f"Texto ({len(final_text_from_php)} chars) excedeu o limite. Truncando...")
+            final_text_from_php = final_text_from_php[:INPUT_CHAR_LIMIT]
 
-        # --- [INÍCIO DA CORREÇÃO] ---
-        logger.info(f"Texto original recebido: '{text_to_process[:100]}...'")
-        # Usamos a função correta, que agora faz todo o trabalho de normalização.
-        corrected_text = correct_grammar_for_grams(text_to_process)
-        logger.info(f"Texto normalizado para TTS: '{corrected_text[:100]}...'")
-        # --- [FIM DA CORREÇÃO] ---
-
-        if model_nickname == 'pro':
-            model_to_use_fullname = "gemini-2.5-pro-preview-tts"
-        else:
-            model_to_use_fullname = "gemini-2.5-flash-preview-tts"
+        # --- A MUDANÇA ARQUITETURAL CRÍTICA ---
+        # Nenhuma chamada para text_utils.py. Nenhuma normalização.
+        # O texto do PHP é a verdade absoluta.
+        logger.info(f"Texto final (confiado do PHP) para TTS: '{final_text_from_php[:150]}...'")
         
-        logger.info(f"Usando modelo: {model_to_use_fullname}")
+        # 3. Mapeamento do modelo e configuração da API
+        model_to_use_fullname = "gemini-1.5-flash-tts-001" if model_nickname != 'pro' else "gemini-1.5-pro-tts-001"
+        logger.info(f"Usando modelo TTS: {model_to_use_fullname}")
         
         client = genai.Client(api_key=api_key)
-
         generate_content_config = types.GenerateContentConfig(
             response_modalities=["audio"],
-            max_output_tokens=8192,
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(
@@ -83,20 +81,30 @@ def generate_audio_endpoint():
             )
         )
         
+        # 4. Geração do áudio via streaming
         audio_data_chunks = []
         for chunk in client.models.generate_content_stream(
-            model=model_to_use_fullname, contents=corrected_text, config=generate_content_config
+            model=model_to_use_fullname,
+            contents=final_text_from_php, # Usando o texto final diretamente
+            config=generate_content_config
         ):
-            if (chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts and chunk.candidates[0].content.parts[0].inline_data and chunk.candidates[0].content.parts[0].inline_data.data):
+            if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
                 audio_data_chunks.append(chunk.candidates[0].content.parts[0].inline_data.data)
 
         if not audio_data_chunks:
-             return jsonify({"error": "A API respondeu, mas não retornou dados de áudio."}), 500
+             logger.error("A API do Google respondeu, mas não retornou dados de áudio.")
+             return jsonify({"error": "Falha na geração de áudio pela API externa."}), 500
 
+        # 5. Processamento e conversão para MP3
         full_audio_data_raw = b''.join(audio_data_chunks)
-        
         logger.info("Áudio bruto recebido. Convertendo para MP3 Mono...")
-        audio_segment = AudioSegment.from_raw(io.BytesIO(full_audio_data_raw), sample_width=2, frame_rate=24000, channels=1)
+        
+        audio_segment = AudioSegment.from_raw(
+            io.BytesIO(full_audio_data_raw),
+            sample_width=2,
+            frame_rate=24000,
+            channels=1
+        )
         
         mp3_buffer = io.BytesIO()
         audio_segment.export(mp3_buffer, format="mp3", bitrate="64k")
@@ -104,17 +112,22 @@ def generate_audio_endpoint():
         
         logger.info(f"Conversão para MP3 concluída. Tamanho: {len(mp3_data) / 1024:.2f} KB")
 
-        http_response = make_response(send_file(io.BytesIO(mp3_data), mimetype='audio/mpeg', as_attachment=False))
+        # 6. Envio da resposta de áudio
+        http_response = make_response(send_file(
+            io.BytesIO(mp3_data),
+            mimetype='audio/mpeg',
+            as_attachment=False
+        ))
         http_response.headers['X-Model-Used'] = model_nickname
         
-        logger.info(f"Sucesso: Áudio MP3 Mono gerado e enviado ao cliente.")
+        logger.info("Sucesso: Áudio MP3 gerado e enviado ao cliente.")
         return http_response
 
     except Exception as e:
-        error_message = f"Erro inesperado: {e}"
-        logger.error(f"ERRO CRÍTICO NA API: {error_message}", exc_info=True)
-        return jsonify({"error": error_message}), 500
+        error_message = f"Erro inesperado no serviço Python: {e}"
+        logger.error(f"ERRO CRÍTICO: {error_message}", exc_info=True)
+        return jsonify({"error": error_message, "user_message": "Ocorreu uma falha interna no serviço de geração de áudio."}), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 8080)) # Porta padrão para muitos serviços de nuvem
     app.run(host='0.0.0.0', port=port)
