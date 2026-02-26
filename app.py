@@ -1,5 +1,6 @@
-# app.py - VERSÃO 23.5 - FINAL STABLE PAYLOAD FOR PHP SKILL SYNC
-# DESCRIÇÃO: Engine de Geração otimizada para estabilidade e respeito ao System Instruction.
+# app.py - VERSÃO 23.6 - DASHBOARD MODE (SYNC WITH PHP CONTEXT GUARD)
+# DESCRIÇÃO: Motor de Geração ajustado para limpar as tags <context_guard> do PHP
+#            e usar o texto normalizado como conteúdo primário.
 
 import os
 import base64
@@ -14,7 +15,6 @@ from pydantic import BaseModel
 try:
     import google.generativeai as genai
     from google.generativeai import types
-    from google.api_core import exceptions as google_exceptions
 except ImportError:
     raise ImportError("Instale a biblioteca google-generativeai: pip install google-generativeai")
 
@@ -43,7 +43,7 @@ class AudioRequest(BaseModel):
 
 @app.get("/")
 def health_check():
-    return {"status": "online", "engine": "Voice Hub Python V23.5 (Stability Mode)"}
+    return {"status": "online", "engine": "Voice Hub Python V23.6 (PHP Context Sync)"}
 
 def add_wav_header(pcm_data: bytes, sample_rate: int = 24000, channels: int = 1, bits_per_sample: int = 16) -> bytes:
     data_size = len(pcm_data)
@@ -77,19 +77,24 @@ async def generate_audio(req: AudioRequest):
         return jsonify({"error": "Texto e voz são obrigatórios."}), 400
 
     try:
-        # O texto JÁ VEIO NORMALIZADO pelo ContextGuard (incluindo <context_guard> tags)
-        # Vamos enviar o texto puro, sem concatenação desnecessária.
-        text_for_ia = text.strip()
+        # 1. LIMPEZA DO TEXTO RECEBIDO DO PHP: REMOVE A TAG <context_guard>
+        # Isso garante que o Google só receba o texto final limpo.
+        text_for_ia = text.replace("<context_guard>", "").replace("</context_guard>", "").strip()
         
+        # 2. Mapeamento de Modelos
         model_fullname = get_model_fullname(model_nickname)
+            
+        logger.info(f"Usando modelo: {model_fullname} | Temp: {temperature}")
         
-        # INSTRUÇÃO MÍNIMA DE SISTEMA PARA REFORÇAR A FIDELIDADE AO TEXTO ENVIADO
+        client = genai.Client(api_key=api_key)
+
+        # 3. CONFIGURAÇÃO - SYSTEM INSTRUCTION SIMPLIFICADA
         system_instruction_final = (
-            "Leia o texto fornecido EXATAMENTE como está escrito. Não altere a pontuação, o tom ou a forma como números e siglas foram escritos pelo seu processador."
+            "Você é um locutor profissional. Leia o texto EXATAMENTE como ele está escrito. Não faça correções gramaticais ou de pontuação, apenas a locução."
         )
         
         generate_config = types.GenerateContentConfig(
-            system_instruction=system_instruction_final, # Instrução simples e direta
+            system_instruction=system_instruction_final,
             temperature=temperature,
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
@@ -99,32 +104,26 @@ async def generate_audio(req: AudioRequest):
             )
         )
         
-        logger.info(f"Chamando Gemini: Modelo={model_fullname}, Voz={voice_name}")
-        
-        client = genai.Client(api_key=api_key)
-        
-        # MUDANÇA CRÍTICA: Usando generate_content (não stream) para estabilidade
+        # 4. Geração (Usando chamada não-stream para estabilidade, como no teste)
         response = client.models.generate_content(
             model=model_fullname,
             contents=text_for_ia,
             config=generate_config
         )
 
-        # Verifica se a resposta contém áudio
         if not response.candidates or not response.candidates[0].content.parts:
-             raise Exception("API Google falhou: Resposta sem áudio ou candidato.")
+             raise Exception("API Google falhou: Resposta sem áudio.")
 
-        # Extrai o áudio (deve ser um único bloco se não for stream)
         inline_data = response.candidates[0].content.parts[0].inlineData.data
         pcm_bytes = base64.b64decode(inline_data)
         
-        # Converte para WAV e depois para MP3
+        # 5. Conversão para MP3
         wav_bytes = add_wav_header(pcm_bytes)
-        audio_b64 = base64.b64encode(wav_bytes).decode('utf-8')
+        mp3_data = base64.b64encode(wav_bytes).decode('utf-8')
         
-        # Resposta final para o PHP
+        # 6. Resposta
         http_response = make_response(send_file(
-            io.BytesIO(base64.b64decode(audio_b64)), # Envia o MP3 que acabamos de criar
+            io.BytesIO(base64.b64decode(mp3_data)),
             mimetype='audio/mpeg',
             as_attachment=False
         ))
@@ -133,11 +132,11 @@ async def generate_audio(req: AudioRequest):
         logger.info(f"Sucesso ({model_nickname}).")
         return http_response
 
-    except google_exceptions.InternalServerError as e:
-        logger.error(f"ERRO 500 Google API. Tentativas falharam. Detalhe: {e}")
-        return jsonify({"error": "Serviço de Voz do Google temporariamente indisponível. Tente novamente mais tarde."}), 500
+    except google_exceptions.ServerError as e:
+        logger.error(f"ERRO 500 Google API (Tentativas esgotadas ou falha interna): {e}", exc_info=True)
+        return jsonify({"error": "Serviço de Voz do Google com erro interno. Tente novamente mais tarde."}), 500
     except Exception as e:
-        logger.error(f"ERRO CRÍTICO: {str(e)}", exc_info=True)
+        logger.error(f"ERRO CRÍTICO no Servidor Python: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
