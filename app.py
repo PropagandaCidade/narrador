@@ -1,107 +1,124 @@
-# app.py - VERSÃO 22.1 - DASHBOARD EXPERT MODE (SERVIDOR 01)
-# DESCRIÇÃO: Versão corrigida com os modelos Gemini 2.5 Preview.
-# Esta versão é o espelho exato do Servidor 02, garantindo consistência total.
+# app.py - VERSÃO 23.3 - STUDIO & DASHBOARD SYNC (SIMPLIFIED PAYLOAD)
+# DESCRIÇÃO: Motor de Geração com payload limpo, confiando 100% na normalização do PHP (ContextGuard).
 
 import os
-import io
-import logging
+import base64
+import struct
+import requests
+import json
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
-from flask import Flask, request, jsonify, send_file, make_response
-from flask_cors import CORS
-
-from google import genai
-from google.genai import types
-from google.api_core import exceptions as google_exceptions
+try:
+    import google.generativeai as genai
+    from google.generativeai import types
+    from google.api_core import exceptions as google_exceptions
+except ImportError:
+    raise ImportError("Instale a biblioteca google-generativeai: pip install google-generativeai")
 
 from pydub import AudioSegment
+import io
+import logging
+import time
+import random
 
-# Configuração do logging
+# Configuração
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Inicialização do Flask App
-app = Flask(__name__)
+app = FastAPI()
 CORS(app, expose_headers=['X-Model-Used'])
 
-@app.route('/')
-def home():
-    # Identificação para o Servidor 01
-    return "Servidor 01 (Dashboard Expert - Gemini 2.5) está online e pronto."
+api_key = os.environ.get("GEMINI_API_KEY")
 
-@app.route('/api/generate-audio', methods=['POST'])
-def generate_audio_endpoint():
-    logger.info("Recebendo solicitação para /api/generate-audio no Servidor 01")
-    
-    # 1. Validação da API Key
-    api_key = os.environ.get("GEMINI_API_KEY")
+class AudioRequest(BaseModel):
+    text: str
+    voice: str = "Puck"
+    speed: float = 1.0
+    instrucao: str = "" 
+    temp: float = 0.7
+    categoria: str = "Geral" 
+
+@app.get("/")
+def home():
+    return {"status": "online", "engine": "Voice Hub Python V23.3 (Simplified Payload)"}
+
+def add_wav_header(pcm_data: bytes, sample_rate: int = 24000, channels: int = 1, bits_per_sample: int = 16) -> bytes:
+    data_size = len(pcm_data)
+    byte_rate = sample_rate * channels * (bits_per_sample // 8)
+    block_align = channels * (bits_per_sample // 8)
+    header = struct.pack('<4sI4s4sIHHIIHH4sI', b'RIFF', 36 + data_size, b'WAVE', b'fmt ', 16, 1, channels, sample_rate, byte_rate, block_align, bits_per_sample, b'data', data_size)
+    return header + pcm_data
+
+@app.post("/generate-audio")
+async def generate_audio(req: AudioRequest):
     if not api_key:
-        logger.error("ERRO: GEMINI_API_KEY não encontrada no Servidor 01.")
+        logger.error("Chave API ausente.")
         return jsonify({"error": "Configuração do servidor incompleta."}), 500
 
     data = request.get_json()
-    if not data:
-        return jsonify({"error": "Requisição inválida."}), 400
-
-    # 2. Captura de parâmetros
-    text_from_php = data.get('text')
+    text = data.get('text')
     voice_name = data.get('voice')
     model_nickname = data.get('model_to_use', 'flash')
     
-    # Parâmetros Expert do Dashboard
-    custom_prompt = data.get('custom_prompt', '').strip()
+    # Captura a instrução (que virá do Studio Hub, mas será ignorada se for muito longa)
+    custom_prompt = data.get('custom_prompt', '').strip() 
+
     try:
         temperature = float(data.get('temperature', 0.85))
     except (ValueError, TypeError):
         temperature = 0.85
 
-    if not text_from_php or not voice_name:
-        return jsonify({"error": "Texto e voz são obrigatórios."}), 400
+    if not text or not voice_name:
+        return jsonify({"error": "Texto ou voz são obrigatórios."}), 400
 
     try:
-        # 3. Preparação do Texto com Instruções de Estilo
-        if custom_prompt:
-            final_content = f"[INSTRUÇÃO DE INTERPRETAÇÃO: {custom_prompt}] {text_from_php}"
-            logger.info(f"Aplicando Prompt Expert: {custom_prompt[:100]}...")
-        else:
-            final_content = text_from_php
-
-        # 4. Mapeamento de Modelos (Utilizando a versão 2.5 Preview conforme solicitado)
-        if model_nickname in ['pro', 'chirp']:
-            model_to_use_fullname = "gemini-2.5-pro-preview-tts"
-        else:
-            model_to_use_fullname = "gemini-2.5-flash-preview-tts"
+        # 1. LIMPEZA DO TEXTO RECEBIDO DO PHP
+        # Removemos o <context_guard> antes de enviar para o Google, pois o Google pode não gostar.
+        # O texto já está normalizado pelo PHP, então só precisamos limpá-lo de tags.
+        text_for_ia = text.replace("<context_guard>", "").replace("</context_guard>", "").strip()
+        
+        # 2. DEFINIÇÃO DO MODELO
+        model_fullname = get_model_fullname(model_nickname)
             
         logger.info(f"Usando modelo: {model_to_use_fullname} | Temperatura: {temperature}")
         
         client = genai.Client(api_key=api_key)
 
-        # Configuração da Geração
-        generate_content_config = types.GenerateContentConfig(
+        # 3. CONFIGURAÇÃO - INSTRUÇÃO SIMPLES PARA MINIMIZAR ERRO 500
+        # A instrução deve ser concisa para evitar que a IA "fale o prompt"
+        system_instruction_final = (
+            "Leia o texto fornecido de forma clara e profissional. Mantenha a pontuação e o ritmo."
+        )
+        
+        generate_config = types.GenerateContentConfig(
+            system_instruction=system_instruction_final,
             temperature=temperature,
-            response_modalities=["audio"],
+            response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name=voice_name
-                    )
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
                 )
             )
         )
         
-        # 5. Geração via Streaming
+        # 4. GERAÇÃO VIA STREAMING
         audio_data_chunks = []
+        
+        # O 'contents' recebe o texto LIMPO (sem as tags do PHP)
         for chunk in client.models.generate_content_stream(
-            model=model_to_use_fullname,
-            contents=final_content,
+            model=model_fullname,
+            contents=text_for_ia, # Usa o texto puro
             config=generate_content_config
         ):
             if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
                 audio_data_chunks.append(chunk.candidates[0].content.parts[0].inline_data.data)
 
         if not audio_data_chunks:
-             return jsonify({"error": "API do Google não retornou dados de áudio."}), 500
+             raise Exception("API do Google não retornou dados de áudio.")
 
-        # 6. Processamento e conversão para MP3 (Pydub)
+        # 5. Processamento e conversão para MP3 (Pydub)
         full_audio_data_raw = b''.join(audio_data_chunks)
         audio_segment = AudioSegment.from_raw(
             io.BytesIO(full_audio_data_raw),
@@ -114,7 +131,7 @@ def generate_audio_endpoint():
         audio_segment.export(mp3_buffer, format="mp3", bitrate="64k")
         mp3_data = mp3_buffer.getvalue()
         
-        # 7. Resposta
+        # 6. Resposta
         http_response = make_response(send_file(
             io.BytesIO(mp3_data),
             mimetype='audio/mpeg',
