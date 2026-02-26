@@ -1,6 +1,6 @@
-# app.py - VERSÃO 22.1 - DASHBOARD EXPERT MODE (SERVIDOR 01)
-# DESCRIÇÃO: Versão corrigida com os modelos Gemini 2.5 Preview.
-# Esta versão é o espelho exato do Servidor 02, garantindo consistência total.
+# app.py - VERSÃO 23.0 - DASHBOARD EXPERT MODE (SERVIDOR 01)
+# DESCRIÇÃO: Implementação de System Instruction para suporte à Skill Context Guard.
+# VERSÃO: 23.0 - CONTEXT GUARD ENFORCEMENT & SYSTEM PROMPT ISOLATION
 
 import os
 import io
@@ -25,8 +25,7 @@ CORS(app, expose_headers=['X-Model-Used'])
 
 @app.route('/')
 def home():
-    # Identificação para o Servidor 01
-    return "Servidor 01 (Dashboard Expert - Gemini 2.5) está online e pronto."
+    return "Servidor 01 (Dashboard Expert - Gemini 2.5) está online e com Context Guard ativo."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -46,9 +45,8 @@ def generate_audio_endpoint():
     text_from_php = data.get('text')
     voice_name = data.get('voice')
     model_nickname = data.get('model_to_use', 'flash')
-    
-    # Parâmetros Expert do Dashboard
     custom_prompt = data.get('custom_prompt', '').strip()
+    
     try:
         temperature = float(data.get('temperature', 0.85))
     except (ValueError, TypeError):
@@ -58,14 +56,24 @@ def generate_audio_endpoint():
         return jsonify({"error": "Texto e voz são obrigatórios."}), 400
 
     try:
-        # 3. Preparação do Texto com Instruções de Estilo
+        # 3. CONSTRUÇÃO DA INSTRUÇÃO DE SISTEMA (MANDATÓRIA)
+        # Aqui é onde forçamos a IA a respeitar a Skill Context Guard do PHP
+        base_system_prompt = (
+            "Você é um locutor profissional brasileiro de alta performance. "
+            "REGRA CRÍTICA DE INTERPRETAÇÃO: Se o texto estiver envolvido pela tag <context_guard>, "
+            "você deve ler o conteúdo EXATAMENTE como escrito. NÃO tente 'corrigir' a gramática, "
+            "NÃO adicione a palavra 'reais' ou 'centavos' se elas não estiverem escritas, "
+            "e NÃO altere números que já foram convertidos para extenso. "
+            "Sua missão é dar vida ao texto respeitando a fonética fornecida."
+        )
+        
+        # Adiciona as instruções de estilo do usuário (Expert Prompt) à instrução de sistema
         if custom_prompt:
-            final_content = f"[INSTRUÇÃO DE INTERPRETAÇÃO: {custom_prompt}] {text_from_php}"
-            logger.info(f"Aplicando Prompt Expert: {custom_prompt[:100]}...")
+            full_system_instruction = f"{base_system_prompt}\n\nESTILO DE LOCUÇÃO DESEJADO: {custom_prompt}"
         else:
-            final_content = text_from_php
+            full_system_instruction = base_system_prompt
 
-        # 4. Mapeamento de Modelos (Utilizando a versão 2.5 Preview conforme solicitado)
+        # 4. Mapeamento de Modelos
         if model_nickname in ['pro', 'chirp']:
             model_to_use_fullname = "gemini-2.5-pro-preview-tts"
         else:
@@ -75,8 +83,10 @@ def generate_audio_endpoint():
         
         client = genai.Client(api_key=api_key)
 
-        # Configuração da Geração
+        # 5. CONFIGURAÇÃO DA GERAÇÃO COM SYSTEM INSTRUCTION
+        # Agora a instrução de estilo não polui o texto do usuário
         generate_content_config = types.GenerateContentConfig(
+            system_instruction=full_system_instruction,
             temperature=temperature,
             response_modalities=["audio"],
             speech_config=types.SpeechConfig(
@@ -88,11 +98,12 @@ def generate_audio_endpoint():
             )
         )
         
-        # 5. Geração via Streaming
+        # 6. Geração via Streaming
         audio_data_chunks = []
+        # O 'contents' recebe apenas o texto puro (com as tags <context_guard>)
         for chunk in client.models.generate_content_stream(
             model=model_to_use_fullname,
-            contents=final_content,
+            contents=text_from_php,
             config=generate_content_config
         ):
             if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
@@ -101,7 +112,7 @@ def generate_audio_endpoint():
         if not audio_data_chunks:
              return jsonify({"error": "API do Google não retornou dados de áudio."}), 500
 
-        # 6. Processamento e conversão para MP3 (Pydub)
+        # 7. Processamento e conversão para MP3 (Pydub)
         full_audio_data_raw = b''.join(audio_data_chunks)
         audio_segment = AudioSegment.from_raw(
             io.BytesIO(full_audio_data_raw),
@@ -114,7 +125,7 @@ def generate_audio_endpoint():
         audio_segment.export(mp3_buffer, format="mp3", bitrate="64k")
         mp3_data = mp3_buffer.getvalue()
         
-        # 7. Resposta
+        # 8. Resposta
         http_response = make_response(send_file(
             io.BytesIO(mp3_data),
             mimetype='audio/mpeg',
@@ -122,7 +133,7 @@ def generate_audio_endpoint():
         ))
         http_response.headers['X-Model-Used'] = model_nickname
         
-        logger.info(f"Sucesso no Servidor 01: Áudio gerado ({model_nickname}).")
+        logger.info(f"Sucesso no Servidor 01: Áudio gerado com Context Guard.")
         return http_response
 
     except Exception as e:
@@ -130,5 +141,6 @@ def generate_audio_endpoint():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
+    # Railway/Heroku definem a porta automaticamente
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
