@@ -1,6 +1,6 @@
-# app.py - VERSÃO 23.3 - DASHBOARD EXPERT (SERVIDOR 01)
-# LOCAL: voice-hub/app.py
-# DESCRIÇÃO: Mantém modelos 2.5 Preview e limpa tags de Skills.
+# app.py - VERSÃO 24.0 - WORKER ENGINE (NARRADORES N1-N5)
+# LOCAL: voice-hub/app.py (Nos repositórios dos narradores)
+# DESCRIÇÃO: Agora aceita API KEY dinâmica vinda do Master Router.
 
 import os
 import io
@@ -27,33 +27,32 @@ CORS(app, expose_headers=['X-Model-Used'])
 def clean_skill_tags(text):
     """
     Remove as tags <context_guard> e </context_guard> do roteiro.
-    O motor TTS do Google não aceita essas tags no parâmetro 'contents'.
     """
     if not text:
         return ""
-    # Remove as tags mantendo o conteúdo normalizado (ex: 'meia' em vez de '6')
     cleaned = re.sub(r'</?context_guard>', '', text)
     return cleaned.strip()
 
 @app.route('/')
 def home():
-    return "Servidor 01 (Dashboard Expert - Gemini 2.5) está online."
+    server_name = os.environ.get("RAILWAY_SERVICE_NAME", "Worker Desconhecido")
+    return f"Voice Hub Worker ({server_name}) está pronto e aguardando comandos do Master Router."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
-    logger.info("Recebendo solicitação no Servidor 01")
-    
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        logger.error("ERRO: GEMINI_API_KEY não encontrada.")
-        return jsonify({"error": "Configuração do servidor incompleta."}), 500
-
     data = request.get_json()
     if not data:
-        return jsonify({"error": "Requisição inválida."}), 400
+        return jsonify({"error": "Requisição inválida (JSON vazio)."}), 400
 
-    # 1. Captura de parâmetros e LIMPEZA DAS TAGS
-    # O PHP envia o texto com <context_guard>...</context_guard>
+    # --- NOVIDADE: CAPTURA DA CHAVE DINÂMICA ---
+    # Prioriza a chave enviada pelo Master Router. Se não vier, tenta a do ambiente.
+    api_key = data.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    
+    if not api_key:
+        logger.error("ERRO: Nenhuma GEMINI_API_KEY foi fornecida pelo Master Router ou Ambiente.")
+        return jsonify({"error": "Chave de API não encontrada para este processamento."}), 500
+
+    # 1. Captura de parâmetros
     text_raw = data.get('text', '')
     text_to_narrate = clean_skill_tags(text_raw)
     
@@ -72,19 +71,19 @@ def generate_audio_endpoint():
     try:
         # 2. Preparação do Conteúdo Final
         if custom_prompt:
-            # Mantemos sua estrutura de prompt, mas com o texto sem as tags
             final_content = f"[INSTRUÇÃO DE INTERPRETAÇÃO: {custom_prompt}] {text_to_narrate}"
         else:
             final_content = text_to_narrate
 
-        # 3. Mapeamento de Modelos (Respeitando sua solicitação de 2.5 Preview)
+        # 3. Mapeamento de Modelos (Gemini 2.5 Preview)
         if model_nickname in ['pro', 'chirp']:
             model_to_use_fullname = "gemini-2.5-pro-preview-tts"
         else:
             model_to_use_fullname = "gemini-2.5-flash-preview-tts"
             
-        logger.info(f"Usando: {model_to_use_fullname} | Texto Limpo: {text_to_narrate[:50]}...")
+        logger.info(f"Processando narração com chave {api_key[:8]}... no modelo {model_to_use_fullname}")
         
+        # Inicializa o cliente com a chave recebida
         client = genai.Client(api_key=api_key)
 
         # 4. Geração via Streaming
@@ -106,9 +105,9 @@ def generate_audio_endpoint():
                 audio_data_chunks.append(chunk.candidates[0].content.parts[0].inline_data.data)
 
         if not audio_data_chunks:
-             return jsonify({"error": "API do Google não retornou áudio. Verifique os parâmetros."}), 500
+             return jsonify({"error": "O Google Gemini não retornou dados de áudio."}), 500
 
-        # 5. Processamento MP3
+        # 5. Processamento e conversão para MP3
         full_audio_raw = b''.join(audio_data_chunks)
         audio_segment = AudioSegment.from_raw(
             io.BytesIO(full_audio_raw),
@@ -129,7 +128,7 @@ def generate_audio_endpoint():
         return http_response
 
     except Exception as e:
-        logger.error(f"ERRO NO SERVIDOR 01: {e}")
+        logger.error(f"ERRO NO WORKER: {e}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
