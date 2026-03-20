@@ -1,6 +1,6 @@
-# app.py - VERSÃO 24.0 - WORKER ENGINE (NARRADORES N1-N5)
-# LOCAL: voice-hub/app.py (Nos repositórios dos narradores)
-# DESCRIÇÃO: Agora aceita API KEY dinâmica vinda do Master Router.
+# app.py - VERSÃO 25.0 - WORKER ENGINE (HIVE)
+# LOCAL: voice-hub/app.py
+# DESCRIÇÃO: Separação de Instruções de Sistema do Roteiro (Fix: IA lendo instruções).
 
 import os
 import io
@@ -26,7 +26,7 @@ CORS(app, expose_headers=['X-Model-Used'])
 
 def clean_skill_tags(text):
     """
-    Remove as tags <context_guard> e </context_guard> do roteiro.
+    Remove as tags <context_guard> do roteiro.
     """
     if not text:
         return ""
@@ -35,29 +35,28 @@ def clean_skill_tags(text):
 
 @app.route('/')
 def home():
-    server_name = os.environ.get("RAILWAY_SERVICE_NAME", "Worker Desconhecido")
-    return f"Voice Hub Worker ({server_name}) está pronto e aguardando comandos do Master Router."
+    server_name = os.environ.get("RAILWAY_SERVICE_NAME", "Worker")
+    return f"Voice Hub Worker ({server_name}) v25.0 pronto."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
     data = request.get_json()
     if not data:
-        return jsonify({"error": "Requisição inválida (JSON vazio)."}), 400
+        return jsonify({"error": "Requisição inválida."}), 400
 
-    # --- NOVIDADE: CAPTURA DA CHAVE DINÂMICA ---
-    # Prioriza a chave enviada pelo Master Router. Se não vier, tenta a do ambiente.
+    # Captura da chave enviada pelo Master Router
     api_key = data.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
     
     if not api_key:
-        logger.error("ERRO: Nenhuma GEMINI_API_KEY foi fornecida pelo Master Router ou Ambiente.")
-        return jsonify({"error": "Chave de API não encontrada para este processamento."}), 500
+        return jsonify({"error": "Chave de API ausente."}), 500
 
-    # 1. Captura de parâmetros
+    # 1. Parâmetros de Geração
     text_raw = data.get('text', '')
     text_to_narrate = clean_skill_tags(text_raw)
-    
     voice_name = data.get('voice')
     model_nickname = data.get('model_to_use', 'flash')
+    
+    # Instrução de Sistema (O que a IA deve obedecer mas NÃO falar)
     custom_prompt = data.get('custom_prompt', '').strip()
     
     try:
@@ -69,29 +68,25 @@ def generate_audio_endpoint():
         return jsonify({"error": "Texto e voz são obrigatórios."}), 400
 
     try:
-        # 2. Preparação do Conteúdo Final
-        if custom_prompt:
-            final_content = f"[INSTRUÇÃO DE INTERPRETAÇÃO: {custom_prompt}] {text_to_narrate}"
-        else:
-            final_content = text_to_narrate
-
-        # 3. Mapeamento de Modelos (Gemini 2.5 Preview)
+        # 2. Configuração do Modelo
         if model_nickname in ['pro', 'chirp']:
             model_to_use_fullname = "gemini-2.5-pro-preview-tts"
         else:
             model_to_use_fullname = "gemini-2.5-flash-preview-tts"
             
-        logger.info(f"Processando narração com chave {api_key[:8]}... no modelo {model_to_use_fullname}")
+        logger.info(f"Gerando áudio via {model_to_use_fullname}")
         
-        # Inicializa o cliente com a chave recebida
         client = genai.Client(api_key=api_key)
 
-        # 4. Geração via Streaming
+        # 3. Geração via Streaming com Separação de Instruções
         audio_data_chunks = []
+        
+        # Enviamos o custom_prompt como system_instruction para a IA não falar a regra
         for chunk in client.models.generate_content_stream(
             model=model_to_use_fullname,
-            contents=final_content,
+            contents=text_to_narrate, # Apenas o roteiro aqui
             config=types.GenerateContentConfig(
+                system_instruction=custom_prompt if custom_prompt else "Narre com naturalidade.",
                 temperature=temperature,
                 response_modalities=["audio"],
                 speech_config=types.SpeechConfig(
@@ -105,9 +100,9 @@ def generate_audio_endpoint():
                 audio_data_chunks.append(chunk.candidates[0].content.parts[0].inline_data.data)
 
         if not audio_data_chunks:
-             return jsonify({"error": "O Google Gemini não retornou dados de áudio."}), 500
+             return jsonify({"error": "A IA não gerou áudio. Verifique os parâmetros."}), 500
 
-        # 5. Processamento e conversão para MP3
+        # 4. Processamento MP3
         full_audio_raw = b''.join(audio_data_chunks)
         audio_segment = AudioSegment.from_raw(
             io.BytesIO(full_audio_raw),
