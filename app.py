@@ -1,7 +1,7 @@
-# app.py - VERSÃO 26.0 - WORKER ENGINE (HIVE)
-# LOCAL: voice-hub/app.py
-# DESCRIÇÃO: Tratamento de erros do Google e Limpeza de instruções DNA.
-# VERSÃO: 26.0 - ROBUST GOOGLE ERROR CATCHER
+# app.py - VERSÃO 27.0 - UNIFIED WORKER ENGINE (HIVE)
+# LOCAL: Repositório Único do GitHub (Conectado a N1, N2, N3, N4, N5)
+# DESCRIÇÃO: Separação total de Instruções de Sistema e Roteiro.
+# VERSÃO: 27.0 - ANTI-READING INSTRUCTIONS & FAST RESPONSE
 
 import os
 import io
@@ -14,77 +14,86 @@ from flask_cors import CORS
 
 from google import genai
 from google.genai import types
-from google.api_core import exceptions as google_exceptions
-
 from pydub import AudioSegment
 
-# Configuração de Logs
+# 1. CONFIGURAÇÃO DE LOGS
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("HiveWorker")
 
 app = Flask(__name__)
 CORS(app, expose_headers=['X-Model-Used'])
 
-def clean_input_text(text):
+def clean_text_for_ai(text):
     """
-    Limpa tags e caracteres que podem confundir o motor TTS.
+    Limpa o texto removendo tags técnicas e garantindo que a IA 
+    receba apenas o que deve ser narrado.
     """
     if not text:
         return ""
-    # Remove tags context_guard e limpa espaços excessivos
-    cleaned = re.sub(r'</?context_guard>', '', text)
-    cleaned = cleaned.replace('\\"', '"').replace('\\n', '\n')
+    # Remove as tags <context_guard>... e quaisquer outras tags HTML/XML
+    cleaned = re.sub(r'<[^>]*>', '', text)
+    # Remove colchetes de instruções que possam ter vindo no texto
+    cleaned = re.sub(r'\[.*?\]', '', cleaned)
     return cleaned.strip()
 
 @app.route('/')
 def home():
-    return f"Worker {os.environ.get('RAILWAY_SERVICE_NAME', 'Narrador')} v26.0 Ativo."
+    # Identifica qual instância está respondendo no painel do Railway
+    srv = os.environ.get('RAILWAY_SERVICE_NAME', 'Worker Unit')
+    return f"Hive Worker ({srv}) v27.0 - Ativo e Sincronizado."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
     try:
         data = request.get_json()
         if not data:
-            return jsonify({"error": "Payload vazio."}), 400
+            return jsonify({"error": "Dados ausentes."}), 400
 
-        # Captura de Chave
-        api_key = data.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
+        # CAPTURA DE CHAVE DINÂMICA (Enviada pelo Master Router)
+        api_key = data.get("GEMINI_API_KEY")
         if not api_key:
-            return jsonify({"error": "API KEY ausente no Worker."}), 500
+            return jsonify({"error": "Worker não recebeu a API KEY do Mestre."}), 500
 
-        # Parâmetros
-        text_to_narrate = clean_input_text(data.get('text', ''))
+        # PARÂMETROS DE ENTRADA
+        text_raw = data.get('text', '')
+        text_to_narrate = clean_text_for_ai(text_raw)
+        
         voice_name = data.get('voice')
         model_nickname = data.get('model_to_use', 'flash')
         
-        # Limpeza pesada da instrução de sistema para evitar Erro 500 do Google
-        custom_prompt = clean_input_text(data.get('custom_prompt', ''))
-        
+        # INSTRUÇÃO DE SISTEMA (O que a IA obedece mas NÃO fala)
+        # Se não vier do Studio Hub, usamos uma instrução padrão de naturalidade
+        system_rules = data.get('custom_prompt', '').strip()
+        if not system_rules:
+            system_rules = "Aja como um locutor profissional. Narre o texto com naturalidade e clareza."
+
         try:
-            temperature = float(data.get('temperature', 0.85))
+            temp = float(data.get('temperature', 0.85))
         except:
-            temperature = 0.85
+            temp = 0.85
 
         if not text_to_narrate or not voice_name:
-            return jsonify({"error": "Texto e voz são obrigatórios."}), 400
+            return jsonify({"error": "Texto ou Voz não definidos."}), 400
 
-        # Mapeamento de Modelos
+        # MAPEAMENTO DE MODELOS (Gemini 2.5)
         model_fullname = "gemini-2.5-pro-preview-tts" if model_nickname in ['pro', 'chirp'] else "gemini-2.5-flash-preview-tts"
             
-        logger.info(f"Iniciando geração: {model_fullname} | Voz: {voice_name}")
+        logger.info(f"Worker iniciando: {model_fullname} | Voz: {voice_name}")
         
+        # Inicializa o cliente Google com a chave recebida para este job
         client = genai.Client(api_key=api_key)
 
-        # Geração via Streaming
-        audio_data_chunks = []
+        # GERAÇÃO VIA STREAMING (Otimizado)
+        audio_chunks = []
         
         try:
+            # A MÁGICA: system_instruction é passada fora do 'contents'
             for chunk in client.models.generate_content_stream(
                 model=model_fullname,
                 contents=text_to_narrate,
                 config=types.GenerateContentConfig(
-                    system_instruction=custom_prompt if custom_prompt else "Narre com naturalidade.",
-                    temperature=temperature,
+                    system_instruction=system_rules,
+                    temperature=temp,
                     response_modalities=["audio"],
                     speech_config=types.SpeechConfig(
                         voice_config=types.VoiceConfig(
@@ -94,40 +103,37 @@ def generate_audio_endpoint():
                 )
             ):
                 if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
-                    audio_data_chunks.append(chunk.candidates[0].content.parts[0].inline_data.data)
+                    audio_chunks.append(chunk.candidates[0].content.parts[0].inline_data.data)
 
-            if not audio_data_chunks:
-                 logger.error("Google retornou streaming vazio.")
-                 return jsonify({"error": "O Google não gerou o áudio. Tente outro locutor ou reduza o texto."}), 500
+            if not audio_chunks:
+                 return jsonify({"error": "Google Gemini não gerou áudio para este roteiro."}), 500
 
-            # Processamento de Áudio
-            full_audio_raw = b''.join(audio_data_chunks)
-            audio_segment = AudioSegment.from_raw(
-                io.BytesIO(full_audio_raw),
+            # PROCESSAMENTO PARA MP3 (Pydub)
+            full_raw = b''.join(audio_chunks)
+            audio_seg = AudioSegment.from_raw(
+                io.BytesIO(full_raw),
                 sample_width=2,
                 frame_rate=24000,
                 channels=1
             )
             
-            mp3_buffer = io.BytesIO()
-            audio_segment.export(mp3_buffer, format="mp3", bitrate="64k")
+            mp3_io = io.BytesIO()
+            audio_seg.export(mp3_io, format="mp3", bitrate="64k")
             
             response = make_response(send_file(
-                io.BytesIO(mp3_buffer.getvalue()),
+                io.BytesIO(mp3_io.getvalue()),
                 mimetype='audio/mpeg'
             ))
             response.headers['X-Model-Used'] = model_nickname
             return response
 
-        except Exception as google_err:
-            # Captura o erro específico do Google (como o 500 que vimos no log)
-            err_msg = str(google_err)
-            logger.error(f"Erro na API do Google: {err_msg}")
-            return jsonify({"error": f"Google Gemini Error: {err_msg[:100]}"}), 500
+        except Exception as g_err:
+            logger.error(f"Erro na API Google: {str(g_err)}")
+            return jsonify({"error": f"Google API Error: {str(g_err)[:100]}"}), 500
 
     except Exception as e:
         logger.error(f"Erro Crítico no Worker: {traceback.format_exc()}")
-        return jsonify({"error": "Falha interna no processamento do narrador."}), 500
+        return jsonify({"error": "Falha interna no motor de narração."}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
