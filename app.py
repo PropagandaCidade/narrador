@@ -1,6 +1,6 @@
-# app.py - VERSÃO 27.3 - WORKER ENGINE (HIVE STABLE) - FIX: ANTI-CLIPPING & HEADROOM
+# app.py - VERSÃO 27.4.1 - WORKER ENGINE (HIVE STABLE) - ENGINE "COMPANDER PRO"
 # LOCAL: Repositório Único (N1, N2, N3, N4, N5)
-# DESCRIÇÃO: Processamento de áudio profissional com margem de segurança de -2.0dB para evitar clipping.
+# DESCRIÇÃO: Implementação fiel ao Preset "RealAudio Compander" (Compressão + Normalização 95%)
 
 import os
 import io
@@ -30,7 +30,7 @@ def clean_skill_tags(text):
 @app.route('/')
 def home():
     srv = os.environ.get('RAILWAY_SERVICE_NAME', 'Worker')
-    return f"Serviço v27.3 ({srv}) - Audio Limiter & Normalization Active."
+    return f"Serviço v27.4.1 ({srv}) - Engine Compander Pro Online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -83,7 +83,7 @@ def generate_audio_endpoint():
         if not audio_data_chunks:
              return jsonify({"error": "Sem dados de áudio do Google."}), 500
 
-        # --- PROCESSAMENTO DE ÁUDIO ANTI-CLIPPING ---
+        # --- PROCESSAMENTO ENGINE COMPANDER PRO ---
         full_audio_raw = b''.join(audio_data_chunks)
         audio_segment = AudioSegment.from_raw(
             io.BytesIO(full_audio_raw),
@@ -92,17 +92,23 @@ def generate_audio_endpoint():
             channels=1
         )
 
-        # 1. Compressão Dinâmica para dar corpo à voz e uniformidade
-        audio_segment = effects.compress_dynamic_range(audio_segment)
+        # PASSO 1: Compressor (Parâmetros da sua imagem "RealAudio Compander")
+        # Ele vai detectar o pico alto e reduzi-lo na proporção de 3.8 para 1,
+        # enquanto levanta o volume das partes baixas.
+        audio_segment = effects.compress_dynamic_range(
+            audio_segment, 
+            threshold=-9.0, 
+            ratio=3.8, 
+            attack=0.5, 
+            release=300.0
+        )
 
-        # 2. Normalização com Headroom (Margem de Segurança)
-        # Definindo headroom de 2.0 dB, garantimos que o pico máximo fique em -2.0 dBFS.
-        # Isso impede que o áudio chegue aos 32.768 "smpl" e cause clipping.
-        audio_segment = effects.normalize(audio_segment, headroom=2.0)
+        # PASSO 2: Normalização a 95% (aprox. -0.45 dB)
+        # Agora que o pico foi domado pelo compressor, a normalização subirá o áudio todo uniformemente.
+        audio_segment = effects.normalize(audio_segment, headroom=0.45)
         # --------------------------------------------
 
         mp3_buffer = io.BytesIO()
-        # Exportando com bitrate de 64k (pode aumentar para 128k se quiser mais qualidade)
         audio_segment.export(mp3_buffer, format="mp3", bitrate="64k")
         
         http_response = make_response(send_file(
