@@ -1,6 +1,6 @@
-# app.py - VERSÃO 27.4.1 - WORKER ENGINE (HIVE STABLE) - ENGINE "COMPANDER PRO"
+# app.py - VERSÃO 27.5 - WORKER ENGINE (HIVE STABLE) - ENGINE "COMPANDER PRO + HUMAN"
 # LOCAL: Repositório Único (N1, N2, N3, N4, N5)
-# DESCRIÇÃO: Implementação fiel ao Preset "RealAudio Compander" (Compressão + Normalização 95%)
+# DESCRIÇÃO: Processamento Compander Profissional com Proteção de Respirações e Normalização 95%.
 
 import os
 import io
@@ -30,7 +30,7 @@ def clean_skill_tags(text):
 @app.route('/')
 def home():
     srv = os.environ.get('RAILWAY_SERVICE_NAME', 'Worker')
-    return f"Serviço v27.4.1 ({srv}) - Engine Compander Pro Online."
+    return f"Serviço v27.5 ({srv}) - Engine Compander Pro + Breathing Protection."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -83,7 +83,7 @@ def generate_audio_endpoint():
         if not audio_data_chunks:
              return jsonify({"error": "Sem dados de áudio do Google."}), 500
 
-        # --- PROCESSAMENTO ENGINE COMPANDER PRO ---
+        # --- PROCESSAMENTO ENGINE COMPANDER PRO + HUMAN PROTECTION ---
         full_audio_raw = b''.join(audio_data_chunks)
         audio_segment = AudioSegment.from_raw(
             io.BytesIO(full_audio_raw),
@@ -92,21 +92,23 @@ def generate_audio_endpoint():
             channels=1
         )
 
-        # PASSO 1: Compressor (Parâmetros da sua imagem "RealAudio Compander")
-        # Ele vai detectar o pico alto e reduzi-lo na proporção de 3.8 para 1,
-        # enquanto levanta o volume das partes baixas.
+        # ETAPA A: Pré-Normalização em -3dB. 
+        # Isso "abaixa o volume" do pico inicial antes que ele atrapalhe o compressor.
+        audio_segment = effects.normalize(audio_segment, headroom=3.0)
+
+        # ETAPA B: Compressor (Parametrizado conforme suas imagens)
+        # Release ajustado para 400ms para proteger a suavidade das respirações (Human Protection).
         audio_segment = effects.compress_dynamic_range(
             audio_segment, 
             threshold=-9.0, 
             ratio=3.8, 
             attack=0.5, 
-            release=300.0
+            release=400.0
         )
 
-        # PASSO 2: Normalização a 95% (aprox. -0.45 dB)
-        # Agora que o pico foi domado pelo compressor, a normalização subirá o áudio todo uniformemente.
+        # ETAPA C: Normalização Final a 95% (-0.45 dB)
         audio_segment = effects.normalize(audio_segment, headroom=0.45)
-        # --------------------------------------------
+        # ---------------------------------------------------------------
 
         mp3_buffer = io.BytesIO()
         audio_segment.export(mp3_buffer, format="mp3", bitrate="64k")
