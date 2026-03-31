@@ -1,6 +1,6 @@
-# studio_worker.py - VERSÃO 28.6 - ENGINE STUDIO PRO (HIVE)
+# studio_worker.py - VERSÃO 28.7 - ENGINE STUDIO PRO (HIVE)
 # LOCAL: studio-engine.up.railway.app
-# DESCRIÇÃO: Ajuste de Cauda (Padding), Refino de EQ FM e Hard Limiter.
+# DESCRIÇÃO: Ajuste de Cauda (Padding) Inteligente - Apenas se houver Delay/Reverb.
 
 import os
 import io
@@ -38,7 +38,7 @@ def clean_skill_tags(text):
 
 def apply_advanced_studio_fx(audio_segment, fx_raw):
     """
-    Motor de Estúdio v28.6: Processamento final com cauda de áudio e Limiter.
+    Motor de Estúdio v28.7: Processamento final com cauda inteligente e Limiter.
     """
     fx = fx_raw
     if isinstance(fx_raw, str):
@@ -51,9 +51,15 @@ def apply_advanced_studio_fx(audio_segment, fx_raw):
     if not fx:
         return audio_segment
 
-    # --- NOVIDADE: ADICIONA CAUDA (PADDING) ---
-    # Adicionamos 2 segundos de silêncio para o Delay/Reverb não cortarem no final.
-    audio_segment += AudioSegment.silent(duration=2000)
+    # --- LÓGICA DE CAUDA (PADDING) INTELIGENTE ---
+    # Só adicionamos silêncio se houver efeitos que geram eco/rastro
+    rev_val = float(fx.get("room_reverb", 0))
+    del_active = fx.get("delay", {}).get("active", False)
+    
+    if rev_val > 0 or del_active:
+        # Adicionamos 2 segundos de silêncio para o Delay/Reverb não cortarem no final.
+        audio_segment += AudioSegment.silent(duration=2000)
+        logger.info("ENGINE: Cauda de 2000ms aplicada (Efeitos Espaciais Ativos).")
 
     # Prepara áudio em Estéreo para efeitos espaciais
     audio_segment = audio_segment.set_channels(2)
@@ -80,13 +86,12 @@ def apply_advanced_studio_fx(audio_segment, fx_raw):
         effects_list.append(LowpassFilter(cutoff_frequency_hz=3200))
 
     # C. AMBIÊNCIA (ROOM REVERB)
-    rev = float(fx.get("room_reverb", 0))
-    if rev > 0:
-        effects_list.append(Reverb(room_size=0.12, dry_level=1.0, wet_level=rev))
+    if rev_val > 0:
+        effects_list.append(Reverb(room_size=0.12, dry_level=1.0, wet_level=rev_val))
 
     # D. ECO (DELAY)
     del_config = fx.get("delay", {})
-    if del_config.get("active"):
+    if del_active:
         d_time = float(del_config.get("time_ms", 300)) / 1000.0
         effects_list.append(Delay(
             delay_seconds=d_time, 
@@ -99,7 +104,7 @@ def apply_advanced_studio_fx(audio_segment, fx_raw):
     if warm > 0:
         effects_list.append(Gain(gain_db=warm * 6.5))
 
-    # F. --- NOVIDADE: HARD LIMITER FINAL ---
+    # F. --- HARD LIMITER FINAL ---
     # Garante volume forte (95%) sem nunca distorcer.
     effects_list.append(Limiter(threshold_db=-0.5, release_ms=100.0))
 
@@ -113,7 +118,7 @@ def apply_advanced_studio_fx(audio_segment, fx_raw):
 
 @app.route('/')
 def home():
-    return "Studio Engine v28.6 (Final Master) Online."
+    return "Studio Engine v28.7 (Smart Tail) Online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_studio():
@@ -163,7 +168,7 @@ def generate_audio_studio():
         seg = effects.normalize(seg, headroom=3.0)
         seg = effects.compress_dynamic_range(seg, threshold=-9.0, ratio=3.8, attack=0.5, release=400.0)
 
-        # B. ENGINE STUDIO v28.6 (FINAL MASTER)
+        # B. ENGINE STUDIO v28.7 (FINAL MASTER)
         seg = apply_advanced_studio_fx(seg, fx_params)
 
         # C. Normalização Final 95%
@@ -174,7 +179,7 @@ def generate_audio_studio():
         seg.export(out, format="mp3", bitrate="128k", parameters=["-ar", "44100"])
         
         res = make_response(send_file(io.BytesIO(out.getvalue()), mimetype='audio/mpeg'))
-        res.headers['X-Studio-Engine'] = "Pedalboard-v28.6"
+        res.headers['X-Studio-Engine'] = "Pedalboard-v28.7"
         return res
 
     except Exception as e:
