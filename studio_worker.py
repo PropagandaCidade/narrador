@@ -1,6 +1,6 @@
-# studio_worker.py - VERSÃO 28.4 - ENGINE STUDIO PRO (HIVE)
+# studio_worker.py - VERSÃO 28.5 - ENGINE STUDIO PRO (HIVE)
 # LOCAL: studio-engine.up.railway.app
-# DESCRIÇÃO: Ajuste de Pipeline Estéreo para Pedalboard e Mega Logging de Entrada.
+# DESCRIÇÃO: Correção de nomenclatura (HighpassFilter/LowpassFilter) para compatibilidade.
 
 import os
 import io
@@ -21,7 +21,7 @@ from pydub import AudioSegment, effects
 import pedalboard
 from pedalboard import (
     Pedalboard, Reverb, Delay, HighShelfFilter, LowShelfFilter, 
-    Gain, PeakFilter, HighPassFilter, LowPassFilter, Distortion
+    Gain, PeakFilter, HighpassFilter, LowpassFilter, Distortion
 )
 
 # 1. CONFIGURAÇÃO DE LOGS
@@ -38,84 +38,75 @@ def clean_skill_tags(text):
 
 def apply_advanced_studio_fx(audio_segment, fx_raw):
     """
-    Motor de Estúdio v28.4: Processamento em Estéreo para garantir efeitos espaciais.
+    Motor de Estúdio v28.5: Processamento de efeitos corrigido.
     """
-    # 1. TRATAMENTO DO JSON DE ENTRADA
     fx = fx_raw
     if isinstance(fx_raw, str):
         try: fx = json.loads(fx_raw)
         except: fx = {}
     
-    # MEGA LOG DE ENTRADA PARA AUDITORIA NO RAILWAY
     logger.info(f"MEGA LOG ENTRADA (studio_fx): {json.dumps(fx)}")
 
     if not fx:
-        logger.warning("AUDITORIA: studio_fx está vazio ou inválido.")
         return audio_segment
 
-    # 2. PREPARAÇÃO DO ÁUDIO (Forçar Estéreo para Reverb/Delay)
+    # Prepara áudio em Estéreo para efeitos espaciais
     audio_segment = audio_segment.set_channels(2)
     sr = audio_segment.frame_rate
-    
-    # Conversão Pydub -> Numpy
     samples = np.array(audio_segment.get_array_of_samples()).astype(np.float32).reshape((-1, 2)).T / 32768.0
     
-    # 3. CONSTRUÇÃO DA CADEIA DE EFEITOS
     effects_list = []
 
-    # A. PROXIMIDADE (Grave de Boca no Mic)
+    # A. PROXIMIDADE
     dist = float(fx.get("mic_distance_cm", 15))
     if dist <= 8:
-        logger.info(f"AUDITORIA: Ativando Proximidade Extrema ({dist}cm)")
         effects_list.append(LowShelfFilter(cutoff_frequency_hz=150, gain_db=8.0)) 
 
     # B. MODELAGEM DE MICROFONE
     mic = fx.get("mic_model", "padrão_flat")
-    logger.info(f"AUDITORIA: Modelo Mic: {mic}")
-
     if mic == "shure_sm7b":
         effects_list.append(PeakFilter(cutoff_frequency_hz=3500, gain_db=4.0, q=1.0))
         effects_list.append(LowShelfFilter(cutoff_frequency_hz=150, gain_db=2.5))
     elif mic == "neumann_u87_ai":
         effects_list.append(HighShelfFilter(cutoff_frequency_hz=8500, gain_db=4.5))
     elif mic == "old_telephone_1950":
-        effects_list.append(HighPassFilter(cutoff_frequency_hz=500))
-        effects_list.append(LowPassFilter(cutoff_frequency_hz=3000))
+        effects_list.append(HighpassFilter(cutoff_frequency_hz=450))
+        effects_list.append(LowpassFilter(cutoff_frequency_hz=3000))
+    elif mic == "megaphone_outdoor":
+        effects_list.append(PeakFilter(cutoff_frequency_hz=2000, gain_db=10, q=2.0))
+        effects_list.append(HighpassFilter(cutoff_frequency_hz=500))
 
     # C. AMBIÊNCIA (ROOM REVERB)
     rev = float(fx.get("room_reverb", 0))
     if rev > 0:
-        logger.info(f"AUDITORIA: Ativando Reverb ({rev})")
         effects_list.append(Reverb(room_size=0.15, dry_level=1.0, wet_level=rev))
 
-    # D. ECO (DELAY) - Forçado para teste se ativo no JSON
+    # D. ECO (DELAY)
     del_config = fx.get("delay", {})
     if del_config.get("active"):
         d_time = float(del_config.get("time_ms", 300)) / 1000.0
-        d_mix = float(del_config.get("mix", 0.15))
-        d_fb = float(del_config.get("feedback", 0.3))
-        logger.info(f"AUDITORIA: Ativando Delay ({d_time}s) FB:{d_fb} Mix:{d_mix}")
-        effects_list.append(Delay(delay_seconds=d_time, feedback=d_fb, mix=d_mix))
+        effects_list.append(Delay(
+            delay_seconds=d_time, 
+            feedback=float(del_config.get("feedback", 0.45)), 
+            mix=float(del_config.get("mix", 0.35))
+        ))
 
     # E. CALOR ANALÓGICO
     warm = float(fx.get("analog_warmth", 0))
     if warm > 0:
         effects_list.append(Gain(gain_db=warm * 7.0))
 
-    # 4. PROCESSAMENTO FINAL (Engine Pedalboard)
+    # Processamento Final
     board = Pedalboard(effects_list)
     processed = board(samples, sr)
     
-    # 5. CONVERSÃO DE VOLTA (Numpy -> Pydub)
+    # Conversão de volta
     processed = (processed.T.flatten() * 32767).astype(np.int16)
-    final_seg = AudioSegment(processed.tobytes(), frame_rate=sr, sample_width=2, channels=2)
-    
-    # Volta para Mono se desejar ou mantém Estéreo (Melhor para Delay/Reverb)
-    return final_seg
+    return AudioSegment(processed.tobytes(), frame_rate=sr, sample_width=2, channels=2)
 
 @app.route('/')
 def home():
-    return "Studio Engine v28.4 (Stereo FX Pipeline) Online."
+    return "Studio Engine v28.5 (Fixed Pipeline) Online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_studio():
@@ -129,10 +120,8 @@ def generate_audio_studio():
         custom_prompt = data.get('custom_prompt', '').strip()
         temp = float(data.get('temperature', 0.85))
         
-        # PARAMETROS STUDIO HUB FX
         fx_params = data.get('studio_fx', {})
 
-        # PROMPT v27.1 REVERTIDO PARA ESTABILIDADE
         final_prompt = f"[CONTEXTO/ESTILO DE NARRAÇÃO: {custom_prompt}] {text_to_narrate}" if custom_prompt else text_to_narrate
 
         model_fullname = "gemini-2.5-pro-preview-tts" if model_nickname in ['pro', 'chirp'] else "gemini-2.5-flash-preview-tts"
@@ -146,40 +135,35 @@ def generate_audio_studio():
             )
         )
 
-        # RETRY LOGIC (Google Stability)
         audio_chunks = []
-        for attempt in range(2):
+        for _ in range(2):
             try:
                 audio_chunks = []
                 for chunk in client.models.generate_content_stream(model=model_fullname, contents=final_prompt, config=gen_config):
                     if chunk.candidates and chunk.candidates[0].content.parts:
                         audio_chunks.append(chunk.candidates[0].content.parts[0].inline_data.data)
                 if audio_chunks: break
-            except: 
-                time.sleep(0.4)
+            except: time.sleep(0.4)
 
-        if not audio_chunks: return jsonify({"error": "Google API Fallback."}), 500
+        if not audio_chunks: return jsonify({"error": "Google API Error."}), 500
 
         # --- PROCESSAMENTO ---
         raw_audio = b''.join(audio_chunks)
         seg = AudioSegment.from_raw(io.BytesIO(raw_audio), sample_width=2, frame_rate=24000, channels=1)
 
-        # A. Tratamento de Volume Base (Compander Pro v27.7)
         seg = effects.normalize(seg, headroom=3.0)
         seg = effects.compress_dynamic_range(seg, threshold=-9.0, ratio=3.8, attack=0.5, release=400.0)
 
-        # B. STUDIO FX ENGINE (v28.4 - STEREO PIPELINE)
+        # ENGINE STUDIO v28.5
         seg = apply_advanced_studio_fx(seg, fx_params)
 
-        # C. Normalização Final 95%
         seg = effects.normalize(seg, headroom=0.45)
 
-        # EXPORTAÇÃO HI-FI (128k / 44.1kHz)
         out = io.BytesIO()
         seg.export(out, format="mp3", bitrate="128k", parameters=["-ar", "44100"])
         
         res = make_response(send_file(io.BytesIO(out.getvalue()), mimetype='audio/mpeg'))
-        res.headers['X-Studio-Engine'] = "Pedalboard-v28.4-Stereo"
+        res.headers['X-Studio-Engine'] = "Pedalboard-v28.5"
         return res
 
     except Exception as e:
