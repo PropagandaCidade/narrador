@@ -1,11 +1,12 @@
-# app.py - VERSÃO 27.6 - WORKER ENGINE (HIVE STABLE) - ENGINE "COMPANDER PRO + HI-FI"
+# app.py - VERSÃO 27.7 - WORKER ENGINE (HIVE STABLE) - HI-FI + PROMPT REVERT + RETRY
 # LOCAL: Repositório Único (N1, N2, N3, N4, N5)
-# DESCRIÇÃO: Processamento Profissional 95%, Proteção de Respiração e Exportação 128k/44.1kHz.
+# DESCRIÇÃO: União da Estabilidade v27.1 com Processamento Profissional v27.6.
 
 import os
 import io
 import logging
 import re
+import time
 
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
@@ -22,7 +23,6 @@ app = Flask(__name__)
 CORS(app, expose_headers=['X-Model-Used'])
 
 def clean_skill_tags(text):
-    """Remove tags de controle interno do texto antes da narração."""
     if not text:
         return ""
     cleaned = re.sub(r'</?context_guard>', '', text)
@@ -31,22 +31,19 @@ def clean_skill_tags(text):
 @app.route('/')
 def home():
     srv = os.environ.get('RAILWAY_SERVICE_NAME', 'Worker')
-    return f"Serviço v27.6 ({srv}) - Engine Compander Hi-Fi (128k) Online."
+    return f"Serviço v27.7 ({srv}) - Hive Hi-Fi Stable Online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
     try:
         data = request.get_json()
         if not data:
-            return jsonify({"error": "Requisição inválida (JSON vazio)."}), 400
+            return jsonify({"error": "Requisição inválida."}), 400
 
-        # CAPTURA DE CHAVE DINÂMICA
         api_key = data.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
         if not api_key:
-            logger.error("ERRO: Nenhuma API KEY fornecida.")
-            return jsonify({"error": "Configuração de chave incompleta."}), 500
+            return jsonify({"error": "Chave Gemini não fornecida."}), 500
 
-        # PARÂMETROS DE ENTRADA
         text_raw = data.get('text', '')
         text_to_narrate = clean_skill_tags(text_raw)
         voice_name = data.get('voice')
@@ -54,6 +51,7 @@ def generate_audio_endpoint():
         custom_prompt = data.get('custom_prompt', '').strip()
         
         try:
+            # Mantém a temperatura original do sistema (0.85 default)
             temperature = float(data.get('temperature', 0.85))
         except:
             temperature = 0.85
@@ -61,15 +59,17 @@ def generate_audio_endpoint():
         if not text_to_narrate or not voice_name:
             return jsonify({"error": "Texto e voz são obrigatórios."}), 400
 
-        # MONTAGEM DO PROMPT PARA A API
-        final_text_for_api = f"[CONTEXTO: {custom_prompt}] {text_to_narrate}" if custom_prompt else text_to_narrate
+        # REVERTED PROMPT LOGIC (v21.1/27.1 style for stability)
+        if custom_prompt:
+            final_text_for_api = f"[CONTEXTO/ESTILO DE NARRAÇÃO: {custom_prompt}] {text_to_narrate}"
+        else:
+            final_text_for_api = text_to_narrate
 
-        # MAPEAMENTO DE MODELO
+        # MODEL MAPPING (Gemini 2.5 - Sem alterações)
         model_to_use_fullname = "gemini-2.5-pro-preview-tts" if model_nickname in ['pro', 'chirp'] else "gemini-2.5-flash-preview-tts"
             
         client = genai.Client(api_key=api_key)
 
-        # CONFIGURAÇÃO DE GERAÇÃO GOOGLE
         generate_config = types.GenerateContentConfig(
             temperature=temperature,
             response_modalities=["audio"],
@@ -80,23 +80,32 @@ def generate_audio_endpoint():
             )
         )
 
+        # LÓGICA DE TENTATIVA AUTOMÁTICA (RETRY) PARA ERRO 500
         audio_data_chunks = []
+        max_retries = 2
         
-        # STREAMING DO GOOGLE
-        for chunk in client.models.generate_content_stream(
-            model=model_to_use_fullname,
-            contents=final_text_for_api,
-            config=generate_config
-        ):
-            if (chunk.candidates and chunk.candidates[0].content and 
-                chunk.candidates[0].content.parts and 
-                chunk.candidates[0].content.parts[0].inline_data):
-                audio_data_chunks.append(chunk.candidates[0].content.parts[0].inline_data.data)
+        for attempt in range(max_retries):
+            try:
+                audio_data_chunks = [] # Limpa buffer para nova tentativa
+                for chunk in client.models.generate_content_stream(model=model_to_use_fullname, contents=final_text_for_api, config=generate_config):
+                    if (chunk.candidates and chunk.candidates[0].content and 
+                        chunk.candidates[0].content.parts and 
+                        chunk.candidates[0].content.parts[0].inline_data):
+                        audio_data_chunks.append(chunk.candidates[0].content.parts[0].inline_data.data)
+                
+                if audio_data_chunks:
+                    break # Sucesso, sai do loop de tentativas
+                    
+            except Exception as e:
+                logger.warning(f"Tentativa {attempt+1} falhou para {model_nickname}: {str(e)}")
+                if attempt == max_retries - 1: # Se for a última tentativa, repassa o erro
+                    raise e
+                time.sleep(0.5) # Pequena pausa antes de tentar de novo
 
         if not audio_data_chunks:
-             return jsonify({"error": "O Google não retornou dados de áudio."}), 500
+             return jsonify({"error": "Google indisponível após tentativas."}), 500
 
-        # --- PROCESSAMENTO ENGINE COMPANDER HI-FI (PROTEÇÃO DE RESPIRAÇÃO) ---
+        # --- PROCESSAMENTO ENGINE COMPANDER HI-FI (v27.6 style) ---
         full_audio_raw = b''.join(audio_data_chunks)
         audio_segment = AudioSegment.from_raw(
             io.BytesIO(full_audio_raw),
@@ -105,38 +114,30 @@ def generate_audio_endpoint():
             channels=1
         )
 
-        # 1. PRÉ-NORMALIZAÇÃO (-3dB): Domar picos iniciais (o "pico solitário")
+        # 1. PRÉ-NORMALIZAÇÃO (-3dB)
         audio_segment = effects.normalize(audio_segment, headroom=3.0)
 
-        # 2. COMPRESSOR COMPANDER: Baseado no preset RealAudio (Threshold -9dB, Ratio 3.8:1)
-        # Release de 400ms protege a suavidade das respirações (Human Protection)
+        # 2. COMPRESSOR COMPANDER (RealAudio Preset)
         audio_segment = effects.compress_dynamic_range(
-            audio_segment, 
-            threshold=-9.0, 
-            ratio=3.8, 
-            attack=0.5, 
-            release=400.0
+            audio_segment, threshold=-9.0, ratio=3.8, attack=0.5, release=400.0
         )
 
-        # 3. NORMALIZAÇÃO FINAL A 95%: Volume máximo profissional sem clipping
+        # 3. NORMALIZAÇÃO FINAL A 95%
         audio_segment = effects.normalize(audio_segment, headroom=0.45)
-        # ----------------------------------------------------------------------
+        # ----------------------------------------------------------
 
-        # EXPORTAÇÃO EM ALTA QUALIDADE (128k / 44.1kHz)
         mp3_buffer = io.BytesIO()
         audio_segment.export(
             mp3_buffer, 
             format="mp3", 
             bitrate="128k", 
-            parameters=["-ar", "44100"]  # Força Sample Rate de 44.1kHz (Qualidade de CD)
+            parameters=["-ar", "44100"]
         )
         
         http_response = make_response(send_file(
             io.BytesIO(mp3_buffer.getvalue()),
             mimetype='audio/mpeg'
         ))
-        
-        # Headers de rastreio
         http_response.headers['X-Model-Used'] = model_nickname
         
         return http_response
