@@ -5,3 +5,5 @@ gevent
 google-genai
 google-api-core
 pydub
+pedalboard==0.9.14
+numpy
