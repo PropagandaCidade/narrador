@@ -1,14 +1,12 @@
-# studio_worker.py - VERSÃO 29.3 - ENGINE STUDIO PRO (HIVE)
+# studio_worker.py - VERSÃO 29.5 - ENGINE STUDIO PRO (HIVE)
 # LOCAL: studio-engine.up.railway.app
-# DESCRIÇÃO: Código otimizado para velocidade máxima. Removido processamento pesado de CPU.
+# DESCRIÇÃO: Carregamento dinâmico de bibliotecas pesadas. Velocidade máxima.
 
 import os
 import io
 import logging
 import re
 import time
-import json
-import numpy as np
 
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
@@ -17,13 +15,6 @@ from google import genai
 from google.genai import types
 from pydub import AudioSegment, effects
 
-# Bibliotecas Profissionais (Pedalboard é usado apenas sob demanda)
-import pedalboard
-from pedalboard import (
-    Pedalboard, Reverb, Delay, HighShelfFilter, LowShelfFilter, 
-    Gain, PeakFilter, Limiter
-)
-
 # 1. CONFIGURAÇÃO DE LOGS
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("StudioWorker")
@@ -31,66 +22,78 @@ logger = logging.getLogger("StudioWorker")
 app = Flask(__name__)
 CORS(app, expose_headers=['X-Model-Used', 'X-Studio-Engine'])
 
-def sanitize_fast(text):
-    """Limpeza ultrarrápida de caracteres e pausas."""
+def sanitize_apex(text):
+    """Limpeza de texto que elimina pausas e erros de conexão."""
     if not text: return ""
-    return text.replace("\r", "").replace("\n", " ").strip()
+    # Substitui quebras de linha por espaços para evitar pausas longas
+    t = text.replace("\r", "").replace("\n", " ")
+    return re.sub(r'\s{2,}', ' ', t).strip()
 
-def apply_studio_fx_optimized(audio_segment, fx_raw):
+def apply_advanced_studio_fx(audio_segment, fx):
     """
-    Aplica efeitos apenas se necessário, economizando CPU e tempo.
+    Motor de Efeitos com Lazy Loading: Só carrega bibliotecas pesadas se necessário.
     """
     try:
-        fx = fx_raw if isinstance(fx_raw, dict) else json.loads(fx_raw or '{}')
-        
-        # Verifica se há necessidade de entrar no motor Pedalboard
+        if not fx: return audio_segment
+
+        # --- VERIFICAÇÃO DE NECESSIDADE (FAST-PATH) ---
         has_reverb = float(fx.get("room_reverb", 0)) > 0.02
         has_delay = fx.get("delay", {}).get("active", False)
-        has_mic = fx.get("mic_model", "flat") != "padrão_flat"
-        
-        if not (has_reverb or has_delay or has_mic):
+        has_mic = fx.get("mic_model", "flat") not in ["padrão_flat", "flat"]
+        has_warmth = float(fx.get("analog_warmth", 0)) > 0.02
+
+        if not (has_reverb or has_delay or has_mic or has_warmth):
+            # Se não há efeitos ativos, não carrega pedalboard e retorna áudio puro
             return audio_segment
 
-        # Se houver efeitos espaciais, adiciona a cauda necessária
+        # --- CARREGAMENTO DINÂMICO (Só aqui o servidor 'pesa') ---
+        import numpy as np
+        from pedalboard import Pedalboard, Reverb, Delay, HighShelfFilter, LowShelfFilter, Gain, PeakFilter, Limiter
+
+        # Adiciona cauda para Reverb/Delay
         if has_reverb or has_delay:
-            audio_segment += AudioSegment.silent(duration=1000)
-        
+            audio_segment += AudioSegment.silent(duration=1200)
+
         audio_segment = audio_segment.set_channels(2)
+        samples = np.array(audio_segment.get_array_of_samples()).astype(np.float32).reshape((-1, 2)).T / 32768.0
         sr = audio_segment.frame_rate
         
-        # Conversão para processamento
-        samples = np.array(audio_segment.get_array_of_samples()).astype(np.float32).reshape((-1, 2)).T / 32768.0
-        
         effects_list = []
-        
-        # Equalização de Microfone
+
+        # Modelagem de Microfone
         mic = str(fx.get("mic_model", "flat")).lower()
         if "shure" in mic or "sm7b" in mic:
             effects_list.append(PeakFilter(cutoff_frequency_hz=3500, gain_db=3.0))
         elif "u87" in mic or "neumann" in mic:
             effects_list.append(HighShelfFilter(cutoff_frequency_hz=9000, gain_db=4.0))
+        elif "rca" in mic or "44bx" in mic:
+            effects_list.append(LowShelfFilter(cutoff_frequency_hz=250, gain_db=5.0))
 
         if has_reverb:
-            effects_list.append(Reverb(room_size=0.1, dry_level=1.0, wet_level=float(fx.get("room_reverb"))))
+            effects_list.append(Reverb(room_size=0.1, wet_level=float(fx.get("room_reverb"))))
 
         if has_delay:
             del_cfg = fx.get("delay", {})
             effects_list.append(Delay(delay_seconds=float(del_cfg.get("time_ms", 300))/1000.0, feedback=0.3, mix=0.2))
 
-        effects_list.append(Limiter(threshold_db=-0.5))
+        if has_warmth:
+            effects_list.append(Gain(gain_db=float(fx.get("analog_warmth")) * 5.0))
+        
+        effects_list.append(Limiter(threshold_db=-1.0))
 
         board = Pedalboard(effects_list)
         processed = board(samples, sr)
         processed = (processed.T.flatten() * 32767).astype(np.int16)
+        
         return AudioSegment(processed.tobytes(), frame_rate=sr, sample_width=2, channels=2)
 
     except Exception as e:
-        logger.error(f"FX Error: {str(e)}")
+        logger.error(f"Erro no processamento pesado: {str(e)}")
         return audio_segment
 
 @app.route('/')
 def home():
-    return "Studio Engine v29.3 (Max Performance) Online."
+    return "Studio Engine v29.5 (Apex Performance) Online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_studio():
@@ -98,20 +101,20 @@ def generate_audio_studio():
         data = request.get_json()
         api_key = data.get("GEMINI_API_KEY")
         
-        text = sanitize_fast(data.get('text', ''))
-        prompt = sanitize_fast(data.get('custom_prompt', ''))
-        
-        # Montagem do prompt original estável
+        # Sanitização e montagem de prompt clássico (Rápido)
+        text = sanitize_apex(data.get('text', ''))
+        prompt = sanitize_apex(data.get('custom_prompt', ''))
         final_prompt = f"[CONTEXTO/ESTILO DE NARRAÇÃO: {prompt}] {text}" if prompt else text
 
         model_fullname = "gemini-2.5-pro-preview-tts" if data.get('model_to_use') in ['pro', 'chirp'] else "gemini-2.5-flash-preview-tts"
+        
         client = genai.Client(api_key=api_key)
 
-        # Geração via Stream (Geralmente mais estável para evitar timeouts de rede)
+        # Geração de Conteúdo (Usando streaming para maior estabilidade de conexão)
         audio_chunks = []
         for chunk in client.models.generate_content_stream(
-            model=model_fullname, 
-            contents=final_prompt, 
+            model=model_fullname,
+            contents=final_prompt,
             config=types.GenerateContentConfig(
                 temperature=float(data.get('temperature', 0.85)),
                 response_modalities=["audio"],
@@ -124,29 +127,28 @@ def generate_audio_studio():
                 audio_chunks.append(chunk.candidates[0].content.parts[0].inline_data.data)
 
         if not audio_chunks:
-            return jsonify({"error": "Google API Error"}), 500
+            return jsonify({"error": "Google API did not return data."}), 500
 
-        # Processamento leve
+        # --- PROCESSAMENTO DE ALTA VELOCIDADE ---
         raw_audio = b''.join(audio_chunks)
         seg = AudioSegment.from_raw(io.BytesIO(raw_audio), sample_width=2, frame_rate=24000, channels=1)
 
-        # Acelera: Normalização e Compressão básicas (Pydub é rápido)
+        # Normalização Pydub (Muito leve)
         seg = effects.normalize(seg, headroom=2.0)
-        seg = effects.compress_dynamic_range(seg)
+        
+        # Aplicação de Efeitos (Com inteligência para pular o pesado se não for usado)
+        seg = apply_advanced_studio_fx(seg, data.get('studio_fx', {}))
 
-        # B. STUDIO FX (Só processa se houver efeitos ativos no JSON)
-        seg = apply_studio_fx_optimized(seg, data.get('studio_fx', {}))
-
-        # Exportação Direta
+        # Exportação Hi-Fi
         out = io.BytesIO()
         seg.export(out, format="mp3", bitrate="128k", parameters=["-ar", "44100"])
         
         res = make_response(send_file(io.BytesIO(out.getvalue()), mimetype='audio/mpeg'))
-        res.headers['X-Studio-Engine'] = "Fast-v29.3"
+        res.headers['X-Studio-Engine'] = "Apex-v29.5"
         return res
 
     except Exception as e:
-        logger.error(f"Erro: {str(e)}")
+        logger.error(f"Erro Crítico: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
