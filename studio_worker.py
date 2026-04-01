@@ -1,6 +1,6 @@
-# studio_worker.py - VERSÃO 29.0 - ENGINE STUDIO PRO (HIVE)
+# studio_worker.py - VERSÃO 29.1 - ENGINE STUDIO PRO (HIVE)
 # LOCAL: studio-engine.up.railway.app
-# DESCRIÇÃO: Processamento de áudio resiliente com proteção contra erros matemáticos.
+# DESCRIÇÃO: Cauda de áudio inteligente (só ativa se houver Reverb ou Delay).
 
 import os
 import io
@@ -41,7 +41,7 @@ def sanitize_clean(text):
 
 def apply_advanced_studio_fx(audio_segment, fx_raw):
     """
-    Motor v29.0: Aplica efeitos de forma resiliente.
+    Motor v29.1: Aplica efeitos de forma inteligente e resiliente.
     """
     try:
         fx = fx_raw
@@ -51,8 +51,14 @@ def apply_advanced_studio_fx(audio_segment, fx_raw):
         
         if not fx: return audio_segment
 
-        # Adiciona cauda para o Reverb/Delay
-        audio_segment += AudioSegment.silent(duration=2000)
+        # --- LOGICA DE CAUDA INTELIGENTE ---
+        # Só adiciona silêncio no fim se houver efeito que precise de "cauda"
+        has_reverb = float(fx.get("room_reverb", 0)) > 0
+        has_delay = fx.get("delay", {}).get("active", False)
+        
+        if has_reverb or has_delay:
+            # Adiciona 1.5 segundos de silêncio para os ecos sumirem naturalmente
+            audio_segment += AudioSegment.silent(duration=1500)
         
         # Garante que o áudio seja Estéreo para o Pedalboard
         audio_segment = audio_segment.set_channels(2)
@@ -60,7 +66,6 @@ def apply_advanced_studio_fx(audio_segment, fx_raw):
         
         # Conversão Segura para Numpy (32-bit Float)
         samples = np.array(audio_segment.get_array_of_samples()).astype(np.float32) / 32768.0
-        # Transforma em array estéreo (2 colunas) de forma robusta
         samples = samples.reshape((-1, 2)).T
         
         effects_list = []
@@ -70,7 +75,7 @@ def apply_advanced_studio_fx(audio_segment, fx_raw):
         if dist <= 10:
             effects_list.append(LowShelfFilter(cutoff_frequency_hz=200, gain_db=6.0)) 
 
-        # B. MICROFONES (Comparação segura)
+        # B. MICROFONES
         mic = str(fx.get("mic_model", "flat")).lower()
         if "shure" in mic or "sm7b" in mic:
             effects_list.append(PeakFilter(cutoff_frequency_hz=3500, gain_db=4.0, q=1.0))
@@ -80,16 +85,16 @@ def apply_advanced_studio_fx(audio_segment, fx_raw):
             effects_list.append(LowShelfFilter(cutoff_frequency_hz=250, gain_db=5.0))
 
         # C. AMBIÊNCIA
-        rev = float(fx.get("room_reverb", 0))
-        if rev > 0:
-            effects_list.append(Reverb(room_size=0.15, dry_level=1.0, wet_level=rev))
+        if has_reverb:
+            rev_val = float(fx.get("room_reverb"))
+            effects_list.append(Reverb(room_size=0.15, dry_level=1.0, wet_level=rev_val))
 
         # D. DELAY
-        del_config = fx.get("delay", {})
-        if del_config.get("active"):
+        if has_delay:
+            del_config = fx.get("delay", {})
             effects_list.append(Delay(
                 delay_seconds=float(del_config.get("time_ms", 350)) / 1000.0,
-                feedback=0.35, mix=0.25
+                feedback=0.35, mix=float(del_config.get("mix", 0.25))
             ))
 
         # E. CALOR ANALÓGICO & LIMITER
@@ -103,17 +108,17 @@ def apply_advanced_studio_fx(audio_segment, fx_raw):
         board = Pedalboard(effects_list)
         processed = board(samples, sr)
         
-        # Conversão de volta (Estéreo -> Numpy -> Pydub)
+        # Conversão de volta
         processed = (processed.T.flatten() * 32767).astype(np.int16)
         return AudioSegment(processed.tobytes(), frame_rate=sr, sample_width=2, channels=2)
 
     except Exception as e:
-        logger.error(f"Erro no processamento de efeitos (Fallback para áudio puro): {str(e)}")
+        logger.error(f"Erro no processamento de efeitos (Fallback): {str(e)}")
         return audio_segment
 
 @app.route('/')
 def home():
-    return "Studio Engine v29.0 (Bulletproof) is online."
+    return "Studio Engine v29.1 (Smart Tail) is online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_studio():
@@ -130,7 +135,7 @@ def generate_audio_studio():
         temp = float(data.get('temperature', 0.85))
         fx_params = data.get('studio_fx', {})
 
-        # 2. PROMPT SEGURO (Sem colchetes complexos)
+        # 2. PROMPT SEGURO
         final_prompt = f"INSTRUCAO: {custom_prompt}. TEXTO PARA NARRAR: {text_to_narrate}"
 
         model_fullname = "gemini-2.5-pro-preview-tts" if model_nickname in ['pro', 'chirp'] else "gemini-2.5-flash-preview-tts"
@@ -153,22 +158,20 @@ def generate_audio_studio():
                     if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
                         audio_chunks.append(chunk.candidates[0].content.parts[0].inline_data.data)
                 if audio_chunks: break
-            except Exception as e:
-                logger.warning(f"Engine Retry {attempt+1}: {str(e)}")
+            except:
                 time.sleep(1.0)
 
         if not audio_chunks:
-            return jsonify({"error": "Falha na API do Google (Erro 500 persistente)."}), 500
+            return jsonify({"error": "Falha na API do Google."}), 500
 
         # --- PROCESSAMENTO ---
         raw_audio = b''.join(audio_chunks)
         seg = AudioSegment.from_raw(io.BytesIO(raw_audio), sample_width=2, frame_rate=24000, channels=1)
 
-        # Volume Inicial
         seg = effects.normalize(seg, headroom=3.0)
         seg = effects.compress_dynamic_range(seg, threshold=-9.0, ratio=3.8, attack=0.5, release=400.0)
 
-        # ENGINE STUDIO v29.0
+        # ENGINE STUDIO v29.1
         seg = apply_advanced_studio_fx(seg, fx_params)
         seg = effects.normalize(seg, headroom=0.45)
 
@@ -177,11 +180,11 @@ def generate_audio_studio():
         seg.export(out, format="mp3", bitrate="128k", parameters=["-ar", "44100"])
         
         res = make_response(send_file(io.BytesIO(out.getvalue()), mimetype='audio/mpeg'))
-        res.headers['X-Studio-Engine'] = "Pedalboard-v29.0"
+        res.headers['X-Studio-Engine'] = "Pedalboard-v29.1"
         return res
 
     except Exception as e:
-        logger.error(f"Erro Crítico Studio Engine: {str(e)}")
+        logger.error(f"Erro Crítico: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
