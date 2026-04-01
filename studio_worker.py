@@ -1,6 +1,6 @@
-# studio_worker.py - VERSÃO 28.8 - ENGINE STUDIO PRO (HIVE)
+# studio_worker.py - VERSÃO 28.9 - ENGINE STUDIO PRO (HIVE)
 # LOCAL: studio-engine.up.railway.app
-# DESCRIÇÃO: Uso de System Instructions oficiais e Sanitização Profunda de Áudio.
+# DESCRIÇÃO: Reversão para Prompt Estável v27.1 com Sanitização de Pausas e Caracteres.
 
 import os
 import io
@@ -31,14 +31,14 @@ logger = logging.getLogger("StudioWorker")
 app = Flask(__name__)
 CORS(app, expose_headers=['X-Model-Used', 'X-Studio-Engine'])
 
-def sanitize_clean_text(text):
+def sanitize_for_google(text):
     """
-    Limpeza absoluta para evitar pausas e erros 500.
+    Remove caracteres de controle e normaliza quebras para evitar Erro 500 e Pausas.
     """
     if not text: return ""
-    # Remove \r, quebras de linha e excesso de espaços
-    t = text.replace("\r", " ")
-    t = re.sub(r'[\n\t]+', ' ', t)
+    # Remove retorno de carro e normaliza quebras de linha para espaço simples
+    t = text.replace("\r", "")
+    t = re.sub(r'\n+', ' ', t)
     t = re.sub(r'\s{2,}', ' ', t)
     # Remove tags internas
     t = re.sub(r'</?context_guard>', '', t)
@@ -46,7 +46,7 @@ def sanitize_clean_text(text):
 
 def apply_advanced_studio_fx(audio_segment, fx_raw):
     """
-    Motor de Estúdio v28.8: Processamento High-End.
+    Motor de Estúdio v28.9: Processamento de Alta Fidelidade.
     """
     fx = fx_raw
     if isinstance(fx_raw, str):
@@ -55,7 +55,7 @@ def apply_advanced_studio_fx(audio_segment, fx_raw):
     
     if not fx: return audio_segment
 
-    # Adiciona pequena cauda para o Reverb/Delay
+    # Adiciona pequena cauda para o Reverb/Delay (Evita corte seco)
     audio_segment += AudioSegment.silent(duration=1800)
 
     # Prepara áudio em Estéreo
@@ -65,27 +65,24 @@ def apply_advanced_studio_fx(audio_segment, fx_raw):
     
     effects_list = []
 
-    # A. PROXIMIDADE (Corpo de Locutor)
+    # A. PROXIMIDADE (Corpo FM)
     dist = float(fx.get("mic_distance_cm", 15))
     if dist <= 10:
-        effects_list.append(LowShelfFilter(cutoff_frequency_hz=200, gain_db=7.0)) 
+        effects_list.append(LowShelfFilter(cutoff_frequency_hz=200, gain_db=6.8)) 
 
-    # B. MODELAGEM DE MICROFONE (Comparação segura sem acentos)
+    # B. MODELAGEM DE MICROFONE (Comparação segura)
     mic = str(fx.get("mic_model", "flat")).lower()
     
     if "shure" in mic or "sm7b" in mic:
-        effects_list.append(PeakFilter(cutoff_frequency_hz=3500, gain_db=4.5, q=1.0))
-        effects_list.append(LowShelfFilter(cutoff_frequency_hz=150, gain_db=3.0))
+        effects_list.append(PeakFilter(cutoff_frequency_hz=3500, gain_db=4.2, q=1.0))
+        effects_list.append(LowShelfFilter(cutoff_frequency_hz=150, gain_db=2.8))
     elif "u87" in mic or "neumann" in mic:
-        effects_list.append(HighShelfFilter(cutoff_frequency_hz=9000, gain_db=5.0))
+        effects_list.append(HighShelfFilter(cutoff_frequency_hz=9000, gain_db=4.8))
     elif "sony" in mic or "c800" in mic:
-        effects_list.append(HighShelfFilter(cutoff_frequency_hz=12000, gain_db=6.0))
+        effects_list.append(HighShelfFilter(cutoff_frequency_hz=12000, gain_db=5.8))
     elif "rca" in mic or "44bx" in mic:
-        effects_list.append(LowShelfFilter(cutoff_frequency_hz=250, gain_db=5.5))
+        effects_list.append(LowShelfFilter(cutoff_frequency_hz=250, gain_db=5.2))
         effects_list.append(HighShelfFilter(cutoff_frequency_hz=7000, gain_db=-5.0))
-    elif "telephone" in mic:
-        effects_list.append(HighpassFilter(cutoff_frequency_hz=450))
-        effects_list.append(LowpassFilter(cutoff_frequency_hz=3200))
 
     # C. AMBIÊNCIA (ROOM REVERB)
     rev = float(fx.get("room_reverb", 0))
@@ -98,19 +95,19 @@ def apply_advanced_studio_fx(audio_segment, fx_raw):
         d_time = float(del_config.get("time_ms", 350)) / 1000.0
         effects_list.append(Delay(
             delay_seconds=d_time, 
-            feedback=float(del_config.get("feedback", 0.40)), 
-            mix=float(del_config.get("mix", 0.30))
+            feedback=float(del_config.get("feedback", 0.38)), 
+            mix=float(del_config.get("mix", 0.28))
         ))
 
     # E. CALOR ANALÓGICO
     warm = float(fx.get("analog_warmth", 0))
     if warm > 0:
-        effects_list.append(Gain(gain_db=warm * 6.8))
+        effects_list.append(Gain(gain_db=warm * 6.5))
 
-    # F. HARD LIMITER (Final Touch)
+    # F. HARD LIMITER
     effects_list.append(Limiter(threshold_db=-0.4, release_ms=100.0))
 
-    # Processamento Final
+    # Processamento Final (Pedalboard)
     board = Pedalboard(effects_list)
     processed = board(samples, sr)
     
@@ -120,7 +117,7 @@ def apply_advanced_studio_fx(audio_segment, fx_raw):
 
 @app.route('/')
 def home():
-    return "Studio Engine v28.8 (Pro Master Engine) is online."
+    return "Studio Engine v28.9 (Stable Engine) is online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_studio():
@@ -128,23 +125,26 @@ def generate_audio_studio():
         data = request.get_json()
         api_key = data.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
         
-        # 1. LIMPEZA PROFUNDA DO TEXTO (Evita pausas e erros)
-        text_to_narrate = sanitize_clean_text(data.get('text', ''))
-        
-        # 2. LIMPEZA DA INSTRUÇÃO DE SISTEMA
-        system_instr = str(data.get('custom_prompt', 'Narre de forma profissional.')).replace("\r", "")
+        # 1. SANITIZAÇÃO DE TEXTO E INSTRUÇÃO (Remove \r e \n excessivos)
+        text_to_narrate = sanitize_for_google(data.get('text', ''))
+        custom_prompt = sanitize_for_google(data.get('custom_prompt', ''))
         
         voice_name = data.get('voice')
         model_nickname = data.get('model_to_use', 'flash')
         temp = float(data.get('temperature', 0.85))
         fx_params = data.get('studio_fx', {})
 
+        # 2. MONTAGEM DO TEXTO FINAL (Volta para a lógica v27.1 de prompt único)
+        if custom_prompt:
+            final_text_for_api = f"[CONTEXTO/ESTILO DE NARRAÇÃO: {custom_prompt}] {text_to_narrate}"
+        else:
+            final_text_for_api = text_to_narrate
+
         model_fullname = "gemini-2.5-pro-preview-tts" if model_nickname in ['pro', 'chirp'] else "gemini-2.5-flash-preview-tts"
         client = genai.Client(api_key=api_key)
 
-        # 3. CONFIGURAÇÃO USANDO 'SYSTEM_INSTRUCTION' OFICIAL (Garante estabilidade 500)
+        # 3. CONFIGURAÇÃO DE GERAÇÃO (ESTÁVEL)
         gen_config = types.GenerateContentConfig(
-            system_instruction=system_instr,
             temperature=temp,
             response_modalities=["audio"],
             speech_config=types.SpeechConfig(
@@ -157,34 +157,34 @@ def generate_audio_studio():
         for attempt in range(2):
             try:
                 audio_chunks = []
-                # Enviamos APENAS o texto no contents. As instruções vão separadas agora.
-                for chunk in client.models.generate_content_stream(model=model_fullname, contents=text_to_narrate, config=gen_config):
+                for chunk in client.models.generate_content_stream(model=model_fullname, contents=final_text_for_api, config=gen_config):
                     if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
                         audio_chunks.append(chunk.candidates[0].content.parts[0].inline_data.data)
                 if audio_chunks: break
             except Exception as e:
                 logger.warning(f"Engine Retry {attempt+1}: {str(e)}")
-                time.sleep(0.6)
+                time.sleep(0.8)
 
-        if not audio_chunks: return jsonify({"error": "Google API 500 - Instrução recusada."}), 500
+        if not audio_chunks: return jsonify({"error": "Google API 500 - Falha de comunicação."}), 500
 
         # --- PROCESSAMENTO ---
         raw_audio = b''.join(audio_chunks)
         seg = AudioSegment.from_raw(io.BytesIO(raw_audio), sample_width=2, frame_rate=24000, channels=1)
 
+        # Tratamento de Volume
         seg = effects.normalize(seg, headroom=3.0)
         seg = effects.compress_dynamic_range(seg, threshold=-9.0, ratio=3.8, attack=0.5, release=400.0)
 
-        # ENGINE STUDIO v28.8 (PRO MASTER)
+        # ENGINE STUDIO v28.9 (Aplica efeitos)
         seg = apply_advanced_studio_fx(seg, fx_params)
         seg = effects.normalize(seg, headroom=0.45)
 
-        # EXPORTAÇÃO HI-FI
+        # EXPORTAÇÃO HI-FI (128k / 44.1kHz)
         out = io.BytesIO()
         seg.export(out, format="mp3", bitrate="128k", parameters=["-ar", "44100"])
         
         res = make_response(send_file(io.BytesIO(out.getvalue()), mimetype='audio/mpeg'))
-        res.headers['X-Studio-Engine'] = "Pedalboard-v28.8-ProMaster"
+        res.headers['X-Studio-Engine'] = "Pedalboard-v28.9-Stable"
         return res
 
     except Exception as e:
