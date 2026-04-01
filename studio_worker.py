@@ -1,6 +1,6 @@
-# studio_worker.py - VERSÃO 29.2 - ENGINE STUDIO PRO (HIVE)
+# studio_worker.py - VERSÃO 29.3 - ENGINE STUDIO PRO (HIVE)
 # LOCAL: studio-engine.up.railway.app
-# DESCRIÇÃO: Modo Turbo para textos curtos e Remoção Automática de Silêncio.
+# DESCRIÇÃO: Código otimizado para velocidade máxima. Removido processamento pesado de CPU.
 
 import os
 import io
@@ -16,13 +16,12 @@ from flask_cors import CORS
 from google import genai
 from google.genai import types
 from pydub import AudioSegment, effects
-from pydub.silence import detect_nonsilent # Para cortar silêncio
 
-# Bibliotecas Profissionais
+# Bibliotecas Profissionais (Pedalboard é usado apenas sob demanda)
 import pedalboard
 from pedalboard import (
     Pedalboard, Reverb, Delay, HighShelfFilter, LowShelfFilter, 
-    Gain, PeakFilter, HighpassFilter, LowpassFilter, Distortion, Limiter
+    Gain, PeakFilter, Limiter
 )
 
 # 1. CONFIGURAÇÃO DE LOGS
@@ -32,74 +31,53 @@ logger = logging.getLogger("StudioWorker")
 app = Flask(__name__)
 CORS(app, expose_headers=['X-Model-Used', 'X-Studio-Engine'])
 
-def sanitize_clean(text):
+def sanitize_fast(text):
+    """Limpeza ultrarrápida de caracteres e pausas."""
     if not text: return ""
-    t = text.replace("\r", " ")
-    t = re.sub(r'[\n\t]+', ' ', t)
-    t = re.sub(r'\s{2,}', ' ', t)
-    return t.strip()
+    return text.replace("\r", "").replace("\n", " ").strip()
 
-def trim_silence(audio_segment):
-    """Corta o silêncio excedente no início e no final do áudio."""
-    nonsilent_parts = detect_nonsilent(audio_segment, min_silence_len=200, silence_thresh=-50)
-    if nonsilent_parts:
-        start_trim = nonsilent_parts[0][0]
-        end_trim = nonsilent_parts[-1][1]
-        return audio_segment[start_trim:end_trim]
-    return audio_segment
-
-def apply_advanced_studio_fx(audio_segment, fx_raw):
+def apply_studio_fx_optimized(audio_segment, fx_raw):
     """
-    Motor v29.2: Aplica efeitos de forma inteligente.
+    Aplica efeitos apenas se necessário, economizando CPU e tempo.
     """
     try:
-        fx = fx_raw
-        if isinstance(fx_raw, str):
-            try: fx = json.loads(fx_raw)
-            except: fx = {}
+        fx = fx_raw if isinstance(fx_raw, dict) else json.loads(fx_raw or '{}')
         
-        # LOGICA DE BYPASS: Se efeitos são 0 ou OFF, não gasta CPU.
-        has_reverb = float(fx.get("room_reverb", 0)) > 0.01
+        # Verifica se há necessidade de entrar no motor Pedalboard
+        has_reverb = float(fx.get("room_reverb", 0)) > 0.02
         has_delay = fx.get("delay", {}).get("active", False)
-        has_warmth = float(fx.get("analog_warmth", 0)) > 0.01
         has_mic = fx.get("mic_model", "flat") != "padrão_flat"
         
-        if not (has_reverb or has_delay or has_warmth or has_mic):
+        if not (has_reverb or has_delay or has_mic):
             return audio_segment
 
-        # Adiciona cauda apenas se houver efeito que precise dela
+        # Se houver efeitos espaciais, adiciona a cauda necessária
         if has_reverb or has_delay:
-            audio_segment += AudioSegment.silent(duration=1500)
+            audio_segment += AudioSegment.silent(duration=1000)
         
         audio_segment = audio_segment.set_channels(2)
         sr = audio_segment.frame_rate
-        samples = np.array(audio_segment.get_array_of_samples()).astype(np.float32) / 32768.0
-        samples = samples.reshape((-1, 2)).T
+        
+        # Conversão para processamento
+        samples = np.array(audio_segment.get_array_of_samples()).astype(np.float32).reshape((-1, 2)).T / 32768.0
         
         effects_list = []
         
-        # A. PROXIMIDADE & MIC
-        dist = float(fx.get("mic_distance_cm", 15))
-        if dist <= 10:
-            effects_list.append(LowShelfFilter(cutoff_frequency_hz=200, gain_db=6.0)) 
-
+        # Equalização de Microfone
         mic = str(fx.get("mic_model", "flat")).lower()
         if "shure" in mic or "sm7b" in mic:
-            effects_list.append(PeakFilter(cutoff_frequency_hz=3500, gain_db=4.0, q=1.0))
+            effects_list.append(PeakFilter(cutoff_frequency_hz=3500, gain_db=3.0))
         elif "u87" in mic or "neumann" in mic:
-            effects_list.append(HighShelfFilter(cutoff_frequency_hz=9000, gain_db=4.5))
+            effects_list.append(HighShelfFilter(cutoff_frequency_hz=9000, gain_db=4.0))
 
         if has_reverb:
-            effects_list.append(Reverb(room_size=0.15, dry_level=1.0, wet_level=float(fx.get("room_reverb"))))
+            effects_list.append(Reverb(room_size=0.1, dry_level=1.0, wet_level=float(fx.get("room_reverb"))))
 
         if has_delay:
-            del_config = fx.get("delay", {})
-            effects_list.append(Delay(delay_seconds=float(del_config.get("time_ms", 350))/1000.0, feedback=0.35, mix=0.25))
+            del_cfg = fx.get("delay", {})
+            effects_list.append(Delay(delay_seconds=float(del_cfg.get("time_ms", 300))/1000.0, feedback=0.3, mix=0.2))
 
-        if has_warmth:
-            effects_list.append(Gain(gain_db=float(fx.get("analog_warmth")) * 6.0))
-        
-        effects_list.append(Limiter(threshold_db=-0.5, release_ms=100.0))
+        effects_list.append(Limiter(threshold_db=-0.5))
 
         board = Pedalboard(effects_list)
         processed = board(samples, sr)
@@ -107,82 +85,68 @@ def apply_advanced_studio_fx(audio_segment, fx_raw):
         return AudioSegment(processed.tobytes(), frame_rate=sr, sample_width=2, channels=2)
 
     except Exception as e:
-        logger.error(f"Erro no processamento: {str(e)}")
+        logger.error(f"FX Error: {str(e)}")
         return audio_segment
 
 @app.route('/')
 def home():
-    return "Studio Engine v29.2 (Turbo Mode) Online."
+    return "Studio Engine v29.3 (Max Performance) Online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_studio():
     try:
         data = request.get_json()
-        api_key = data.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
+        api_key = data.get("GEMINI_API_KEY")
         
-        text_to_narrate = sanitize_clean(data.get('text', ''))
-        custom_prompt = sanitize_clean(data.get('custom_prompt', ''))
+        text = sanitize_fast(data.get('text', ''))
+        prompt = sanitize_fast(data.get('custom_prompt', ''))
         
-        voice_name = data.get('voice')
-        model_nickname = data.get('model_to_use', 'flash')
-        temp = float(data.get('temperature', 0.85))
-        fx_params = data.get('studio_fx', {})
+        # Montagem do prompt original estável
+        final_prompt = f"[CONTEXTO/ESTILO DE NARRAÇÃO: {prompt}] {text}" if prompt else text
 
-        final_prompt = f"INSTRUCAO: {custom_prompt}. TEXTO PARA NARRAR: {text_to_narrate}"
-
-        model_fullname = "gemini-2.5-pro-preview-tts" if model_nickname in ['pro', 'chirp'] else "gemini-2.5-flash-preview-tts"
+        model_fullname = "gemini-2.5-pro-preview-tts" if data.get('model_to_use') in ['pro', 'chirp'] else "gemini-2.5-flash-preview-tts"
         client = genai.Client(api_key=api_key)
 
-        gen_config = types.GenerateContentConfig(
-            temperature=temp,
-            response_modalities=["audio"],
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name))
+        # Geração via Stream (Geralmente mais estável para evitar timeouts de rede)
+        audio_chunks = []
+        for chunk in client.models.generate_content_stream(
+            model=model_fullname, 
+            contents=final_prompt, 
+            config=types.GenerateContentConfig(
+                temperature=float(data.get('temperature', 0.85)),
+                response_modalities=["audio"],
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=data.get('voice')))
+                )
             )
-        )
+        ):
+            if chunk.candidates and chunk.candidates[0].content.parts:
+                audio_chunks.append(chunk.candidates[0].content.parts[0].inline_data.data)
 
-        # MODO TURBO: Geração direta (Sem streaming para textos menores que 500 caracteres)
-        audio_raw = None
-        if len(text_to_narrate) < 500:
-            response = client.models.generate_content(model=model_fullname, contents=final_prompt, config=gen_config)
-            if response.candidates and response.candidates[0].content.parts:
-                audio_raw = response.candidates[0].content.parts[0].inline_data.data
-        
-        # Fallback para streaming se o modo turbo falhar ou texto for longo
-        if not audio_raw:
-            audio_chunks = []
-            for chunk in client.models.generate_content_stream(model=model_fullname, contents=final_prompt, config=gen_config):
-                if chunk.candidates and chunk.candidates[0].content.parts:
-                    audio_chunks.append(chunk.candidates[0].content.parts[0].inline_data.data)
-            audio_raw = b''.join(audio_chunks)
+        if not audio_chunks:
+            return jsonify({"error": "Google API Error"}), 500
 
-        if not audio_raw:
-            return jsonify({"error": "Falha na API do Google."}), 500
+        # Processamento leve
+        raw_audio = b''.join(audio_chunks)
+        seg = AudioSegment.from_raw(io.BytesIO(raw_audio), sample_width=2, frame_rate=24000, channels=1)
 
-        # --- PROCESSAMENTO ---
-        seg = AudioSegment.from_raw(io.BytesIO(audio_raw), sample_width=2, frame_rate=24000, channels=1)
+        # Acelera: Normalização e Compressão básicas (Pydub é rápido)
+        seg = effects.normalize(seg, headroom=2.0)
+        seg = effects.compress_dynamic_range(seg)
 
-        # 1. CORTE DE SILÊNCIO INICIAL E FINAL (Limpeza da IA)
-        seg = trim_silence(seg)
+        # B. STUDIO FX (Só processa se houver efeitos ativos no JSON)
+        seg = apply_studio_fx_optimized(seg, data.get('studio_fx', {}))
 
-        # 2. TRATAMENTO DE VOLUME
-        seg = effects.normalize(seg, headroom=3.0)
-        seg = effects.compress_dynamic_range(seg, threshold=-9.0, ratio=3.8, attack=0.5, release=400.0)
-
-        # 3. ENGINE STUDIO v29.2 (Com Bypass Inteligente)
-        seg = apply_advanced_studio_fx(seg, fx_params)
-        seg = effects.normalize(seg, headroom=0.45)
-
-        # EXPORTAÇÃO HI-FI
+        # Exportação Direta
         out = io.BytesIO()
         seg.export(out, format="mp3", bitrate="128k", parameters=["-ar", "44100"])
         
         res = make_response(send_file(io.BytesIO(out.getvalue()), mimetype='audio/mpeg'))
-        res.headers['X-Studio-Engine'] = "Turbo-v29.2"
+        res.headers['X-Studio-Engine'] = "Fast-v29.3"
         return res
 
     except Exception as e:
-        logger.error(f"Erro Crítico: {str(e)}")
+        logger.error(f"Erro: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
