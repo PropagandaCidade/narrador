@@ -1,6 +1,6 @@
-# studio_worker.py - VERSÃO 30.0 - ENGINE STUDIO PRO (HIVE)
+# studio_worker.py - VERSÃO 30.1 - ENGINE STUDIO PRO (HIVE)
 # LOCAL: studio-engine.up.railway.app
-# DESCRIÇÃO: Sincronia total com a lógica do Dashboard. Sanitização seletiva.
+# DESCRIÇÃO: Remoção total de sanitização para paridade 100% com Dashboard.
 
 import os
 import io
@@ -23,31 +23,14 @@ logger = logging.getLogger("StudioWorker")
 app = Flask(__name__)
 CORS(app, expose_headers=['X-Model-Used', 'X-Studio-Engine'])
 
-def sanitize_for_ai(text, is_content=False):
-    """
-    Limpa o texto mantendo a compatibilidade que o Google exige.
-    """
-    if not text: return ""
-    # SEMPRE remove \r (Carriage Return) que causa o erro 500
-    cleaned = text.replace("\r", "")
-    
-    if is_content:
-        # Para o texto da narração: remove quebras de linha para evitar pausas longas
-        cleaned = re.sub(r'\n+', ' ', cleaned)
-        cleaned = re.sub(r'\s{2,}', ' ', cleaned)
-    
-    # Remove tags internas <context_guard>
-    cleaned = re.sub(r'</?context_guard>', '', cleaned)
-    return cleaned.strip()
-
 def apply_advanced_studio_fx(audio_segment, fx):
     """
-    Motor de Efeitos com Lazy Loading: Só ativa o peso se houver efeito no JSON.
+    Motor de Efeitos: Só ativa se houver configuração no JSON.
     """
     try:
         if not fx: return audio_segment
 
-        # VERIFICAÇÃO DE NECESSIDADE (FAST-PATH)
+        # FAST-PATH: Se efeitos são 0 ou OFF, pula o Pedalboard (Velocidade do Dashboard)
         has_reverb = float(fx.get("room_reverb", 0)) > 0.02
         has_delay = fx.get("delay", {}).get("active", False)
         has_mic = str(fx.get("mic_model", "flat")).lower() not in ["padrão_flat", "flat"]
@@ -56,22 +39,19 @@ def apply_advanced_studio_fx(audio_segment, fx):
         if not (has_reverb or has_delay or has_mic or has_warmth):
             return audio_segment
 
-        # CARREGAMENTO DINÂMICO (Só carrega bibliotecas pesadas se necessário)
+        # CARREGAMENTO SOB DEMANDA (Para não pesar o servidor)
         import numpy as np
         from pedalboard import Pedalboard, Reverb, Delay, HighShelfFilter, LowShelfFilter, Gain, PeakFilter, Limiter
 
-        # Adiciona silêncio no fim para o Reverb/Delay não cortarem (Padding)
         if has_reverb or has_delay:
             audio_segment += AudioSegment.silent(duration=1500)
 
-        # Conversão Estéreo para Pedalboard
         audio_segment = audio_segment.set_channels(2)
         sr = audio_segment.frame_rate
         samples = np.array(audio_segment.get_array_of_samples()).astype(np.float32).reshape((-1, 2)).T / 32768.0
         
         effects_list = []
 
-        # A. Modelagem de Microfone
         mic = str(fx.get("mic_model", "flat")).lower()
         if "shure" in mic or "sm7b" in mic:
             effects_list.append(PeakFilter(cutoff_frequency_hz=3500, gain_db=3.5))
@@ -81,11 +61,9 @@ def apply_advanced_studio_fx(audio_segment, fx):
         elif "rca" in mic or "44bx" in mic:
             effects_list.append(LowShelfFilter(cutoff_frequency_hz=250, gain_db=5.0))
 
-        # B. Ambiência
         if has_reverb:
             effects_list.append(Reverb(room_size=0.15, wet_level=float(fx.get("room_reverb"))))
 
-        # C. Eco
         if has_delay:
             del_cfg = fx.get("delay", {})
             effects_list.append(Delay(
@@ -94,13 +72,11 @@ def apply_advanced_studio_fx(audio_segment, fx):
                 mix=float(del_cfg.get("mix", 0.25))
             ))
 
-        # D. Calor & Limiter Final
         if has_warmth:
             effects_list.append(Gain(gain_db=float(fx.get("analog_warmth")) * 6.0))
         
         effects_list.append(Limiter(threshold_db=-0.5))
 
-        # Processamento
         board = Pedalboard(effects_list)
         processed = board(samples, sr)
         processed = (processed.T.flatten() * 32767).astype(np.int16)
@@ -108,12 +84,12 @@ def apply_advanced_studio_fx(audio_segment, fx):
         return AudioSegment(processed.tobytes(), frame_rate=sr, sample_width=2, channels=2)
 
     except Exception as e:
-        logger.error(f"FX Error (Fallback to raw): {str(e)}")
+        logger.error(f"Erro no FX (Bypass): {str(e)}")
         return audio_segment
 
 @app.route('/')
 def home():
-    return "Studio Engine v30.0 (Stable Sync) Online."
+    return "Studio Engine v30.1 (Raw Sync) is online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_studio():
@@ -121,16 +97,20 @@ def generate_audio_studio():
         data = request.get_json()
         api_key = data.get("GEMINI_API_KEY")
         
-        # --- SANITIZAÇÃO IGUAL AO DASHBOARD (v27.1 style) ---
-        text = sanitize_for_ai(data.get('text', ''), is_content=True)
-        prompt = sanitize_for_ai(data.get('custom_prompt', ''), is_content=False) # Mantém \n no prompt
+        # --- ZERO SANITIZAÇÃO: Pega o texto bruto do JSON (igual ao Dashboard) ---
+        text = data.get('text', '')
+        prompt = data.get('custom_prompt', '')
         
-        final_prompt = f"[CONTEXTO/ESTILO DE NARRAÇÃO: {prompt}] {text}" if prompt else text
+        # Montagem do prompt EXATA da v27.1 (Estável)
+        if prompt:
+            final_prompt = f"[CONTEXTO/ESTILO DE NARRAÇÃO: {prompt}] {text}"
+        else:
+            final_prompt = text
 
         model_fullname = "gemini-2.5-pro-preview-tts" if data.get('model_to_use') in ['pro', 'chirp'] else "gemini-2.5-flash-preview-tts"
         client = genai.Client(api_key=api_key)
 
-        # GERAÇÃO VIA STREAM (Idêntico ao app.py)
+        # Geração via Stream (Paridade total com app.py)
         audio_chunks = []
         for chunk in client.models.generate_content_stream(
             model=model_fullname,
@@ -153,10 +133,10 @@ def generate_audio_studio():
         raw_audio = b''.join(audio_chunks)
         seg = AudioSegment.from_raw(io.BytesIO(raw_audio), sample_width=2, frame_rate=24000, channels=1)
 
-        # Normalização Pydub (Rápida)
+        # Normalização leve
         seg = effects.normalize(seg, headroom=2.0)
         
-        # Aplicação de Efeitos Profissionais
+        # Aplicação de Efeitos (Pula se não houver efeitos ativos)
         seg = apply_advanced_studio_fx(seg, data.get('studio_fx', {}))
 
         # Exportação Hi-Fi
@@ -164,7 +144,7 @@ def generate_audio_studio():
         seg.export(out, format="mp3", bitrate="128k", parameters=["-ar", "44100"])
         
         res = make_response(send_file(io.BytesIO(out.getvalue()), mimetype='audio/mpeg'))
-        res.headers['X-Studio-Engine'] = "Stable-v30.0"
+        res.headers['X-Studio-Engine'] = "Raw-v30.1"
         return res
 
     except Exception as e:
