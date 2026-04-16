@@ -107,7 +107,7 @@ def generate_audio_studio():
         else:
             final_prompt = text
 
-        model_fullname = "gemini-2.5-pro-preview-tts" if data.get('model_to_use') in ['pro', 'chirp'] else "gemini-3.1-flash-tts-preview"
+        model_fullname = "gemini-2.5-pro-preview-tts" if data.get('model_to_use') in ['pro', 'chirp'] else "gemini-2.5-flash-preview-tts"
         client = genai.Client(api_key=api_key)
 
         # Geração via Stream (Paridade total com app.py)
