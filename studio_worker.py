@@ -1,6 +1,6 @@
-# studio_worker.py - VERSÃO 30.1 - ENGINE STUDIO PRO (HIVE)
+# studio_worker.py - VERSÃO 30.2 - ENGINE STUDIO PRO (HIVE)
 # LOCAL: studio-engine.up.railway.app
-# DESCRIÇÃO: Remoção total de sanitização para paridade 100% com Dashboard.
+# DESCRIÇÃO: Suporte dinâmico para modelos 2.5 e 3.1 (Multi-model ready).
 
 import os
 import io
@@ -30,7 +30,7 @@ def apply_advanced_studio_fx(audio_segment, fx):
     try:
         if not fx: return audio_segment
 
-        # FAST-PATH: Se efeitos são 0 ou OFF, pula o Pedalboard (Velocidade do Dashboard)
+        # FAST-PATH: Se efeitos são 0 ou OFF, pula o Pedalboard
         has_reverb = float(fx.get("room_reverb", 0)) > 0.02
         has_delay = fx.get("delay", {}).get("active", False)
         has_mic = str(fx.get("mic_model", "flat")).lower() not in ["padrão_flat", "flat"]
@@ -39,7 +39,7 @@ def apply_advanced_studio_fx(audio_segment, fx):
         if not (has_reverb or has_delay or has_mic or has_warmth):
             return audio_segment
 
-        # CARREGAMENTO SOB DEMANDA (Para não pesar o servidor)
+        # CARREGAMENTO SOB DEMANDA
         import numpy as np
         from pedalboard import Pedalboard, Reverb, Delay, HighShelfFilter, LowShelfFilter, Gain, PeakFilter, Limiter
 
@@ -89,7 +89,7 @@ def apply_advanced_studio_fx(audio_segment, fx):
 
 @app.route('/')
 def home():
-    return "Studio Engine v30.1 (Raw Sync) is online."
+    return "Studio Engine v30.2 (Multi-Model) is online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_studio():
@@ -97,20 +97,35 @@ def generate_audio_studio():
         data = request.get_json()
         api_key = data.get("GEMINI_API_KEY")
         
-        # --- ZERO SANITIZAÇÃO: Pega o texto bruto do JSON (igual ao Dashboard) ---
         text = data.get('text', '')
         prompt = data.get('custom_prompt', '')
+        model_nickname = data.get('model_to_use', 'flash')
+        origin = data.get('origin_interface', 'studio_hub')
         
-        # Montagem do prompt EXATA da v27.1 (Estável)
+        # --- MAPEAMENTO DINÂMICO DE MODELO (v30.2) ---
+        valid_full_models = [
+            'gemini-2.5-flash-preview-tts', 
+            'gemini-2.5-pro-preview-tts', 
+            'gemini-3.1-flash-preview-tts'
+        ]
+
+        if model_nickname in valid_full_models:
+            model_fullname = model_nickname
+        else:
+            # Fallback para apelidos do Dashboard/Studio
+            model_fullname = "gemini-2.5-pro-preview-tts" if model_nickname in ['pro', 'chirp'] else "gemini-2.5-flash-preview-tts"
+
+        logger.info(f"Studio Engine: {origin} | Model: {model_fullname}")
+
+        # Montagem do prompt
         if prompt:
             final_prompt = f"[CONTEXTO/ESTILO DE NARRAÇÃO: {prompt}] {text}"
         else:
             final_prompt = text
 
-        model_fullname = "gemini-2.5-pro-preview-tts" if data.get('model_to_use') in ['pro', 'chirp'] else "gemini-2.5-flash-preview-tts"
         client = genai.Client(api_key=api_key)
 
-        # Geração via Stream (Paridade total com app.py)
+        # Geração via Stream
         audio_chunks = []
         for chunk in client.models.generate_content_stream(
             model=model_fullname,
@@ -136,7 +151,7 @@ def generate_audio_studio():
         # Normalização leve
         seg = effects.normalize(seg, headroom=2.0)
         
-        # Aplicação de Efeitos (Pula se não houver efeitos ativos)
+        # Aplicação de Efeitos
         seg = apply_advanced_studio_fx(seg, data.get('studio_fx', {}))
 
         # Exportação Hi-Fi
@@ -144,7 +159,8 @@ def generate_audio_studio():
         seg.export(out, format="mp3", bitrate="128k", parameters=["-ar", "44100"])
         
         res = make_response(send_file(io.BytesIO(out.getvalue()), mimetype='audio/mpeg'))
-        res.headers['X-Studio-Engine'] = "Raw-v30.1"
+        res.headers['X-Studio-Engine'] = "Active-v30.2"
+        res.headers['X-Model-Used'] = model_fullname
         return res
 
     except Exception as e:

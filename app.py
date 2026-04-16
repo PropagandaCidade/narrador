@@ -1,6 +1,6 @@
-# app.py - VERSÃO 27.7 - WORKER ENGINE (HIVE STABLE) - HI-FI + PROMPT REVERT + RETRY
+# app.py - VERSÃO 27.8 - WORKER ENGINE (HIVE STABLE) - MODEL FLEX SUPPORT
 # LOCAL: Repositório Único (N1, N2, N3, N4, N5)
-# DESCRIÇÃO: União da Estabilidade v27.1 com Processamento Profissional v27.6.
+# DESCRIÇÃO: Suporte dinâmico para modelos 2.5 e 3.1 no Prompt Lab.
 
 import os
 import io
@@ -31,7 +31,7 @@ def clean_skill_tags(text):
 @app.route('/')
 def home():
     srv = os.environ.get('RAILWAY_SERVICE_NAME', 'Worker')
-    return f"Serviço v27.7 ({srv}) - Hive Hi-Fi Stable Online."
+    return f"Serviço v27.8 ({srv}) - Hive Multi-Model Support Online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -49,9 +49,9 @@ def generate_audio_endpoint():
         voice_name = data.get('voice')
         model_nickname = data.get('model_to_use', 'flash')
         custom_prompt = data.get('custom_prompt', '').strip()
+        origin = data.get('origin_interface', 'dashboard')
         
         try:
-            # Mantém a temperatura original do sistema (0.85 default)
             temperature = float(data.get('temperature', 0.85))
         except:
             temperature = 0.85
@@ -59,15 +59,28 @@ def generate_audio_endpoint():
         if not text_to_narrate or not voice_name:
             return jsonify({"error": "Texto e voz são obrigatórios."}), 400
 
-        # REVERTED PROMPT LOGIC (v21.1/27.1 style for stability)
+        # REVERTED PROMPT LOGIC
         if custom_prompt:
             final_text_for_api = f"[CONTEXTO/ESTILO DE NARRAÇÃO: {custom_prompt}] {text_to_narrate}"
         else:
             final_text_for_api = text_to_narrate
 
-        # MODEL MAPPING (Gemini 2.5 - Sem alterações)
-        model_to_use_fullname = "gemini-2.5-pro-preview-tts" if model_nickname in ['pro', 'chirp'] else "gemini-2.5-flash-preview-tts"
+        # --- NOVA LÓGICA DE MAPEAMENTO DE MODELO (v27.8) ---
+        # 1. Se receber o nome completo do modelo (vindo do Prompt Lab)
+        valid_full_models = [
+            'gemini-2.5-flash-preview-tts', 
+            'gemini-2.5-pro-preview-tts', 
+            'gemini-3.1-flash-preview-tts'
+        ]
+        
+        if model_nickname in valid_full_models:
+            model_to_use_fullname = model_nickname
+        # 2. Se receber apelidos (vindo do Dashboard ou Studio)
+        else:
+            model_to_use_fullname = "gemini-2.5-pro-preview-tts" if model_nickname in ['pro', 'chirp'] else "gemini-2.5-flash-preview-tts"
             
+        logger.info(f"Worker processando: {origin} | Model: {model_to_use_fullname}")
+
         client = genai.Client(api_key=api_key)
 
         generate_config = types.GenerateContentConfig(
@@ -80,13 +93,12 @@ def generate_audio_endpoint():
             )
         )
 
-        # LÓGICA DE TENTATIVA AUTOMÁTICA (RETRY) PARA ERRO 500
         audio_data_chunks = []
         max_retries = 2
         
         for attempt in range(max_retries):
             try:
-                audio_data_chunks = [] # Limpa buffer para nova tentativa
+                audio_data_chunks = [] 
                 for chunk in client.models.generate_content_stream(model=model_to_use_fullname, contents=final_text_for_api, config=generate_config):
                     if (chunk.candidates and chunk.candidates[0].content and 
                         chunk.candidates[0].content.parts and 
@@ -94,18 +106,18 @@ def generate_audio_endpoint():
                         audio_data_chunks.append(chunk.candidates[0].content.parts[0].inline_data.data)
                 
                 if audio_data_chunks:
-                    break # Sucesso, sai do loop de tentativas
+                    break 
                     
             except Exception as e:
-                logger.warning(f"Tentativa {attempt+1} falhou para {model_nickname}: {str(e)}")
-                if attempt == max_retries - 1: # Se for a última tentativa, repassa o erro
+                logger.warning(f"Tentativa {attempt+1} falhou para {model_to_use_fullname}: {str(e)}")
+                if attempt == max_retries - 1: 
                     raise e
-                time.sleep(0.5) # Pequena pausa antes de tentar de novo
+                time.sleep(0.5)
 
         if not audio_data_chunks:
              return jsonify({"error": "Google indisponível após tentativas."}), 500
 
-        # --- PROCESSAMENTO ENGINE COMPANDER HI-FI (v27.6 style) ---
+        # --- PROCESSAMENTO ENGINE COMPANDER HI-FI ---
         full_audio_raw = b''.join(audio_data_chunks)
         audio_segment = AudioSegment.from_raw(
             io.BytesIO(full_audio_raw),
@@ -114,17 +126,11 @@ def generate_audio_endpoint():
             channels=1
         )
 
-        # 1. PRÉ-NORMALIZAÇÃO (-3dB)
         audio_segment = effects.normalize(audio_segment, headroom=3.0)
-
-        # 2. COMPRESSOR COMPANDER (RealAudio Preset)
         audio_segment = effects.compress_dynamic_range(
             audio_segment, threshold=-9.0, ratio=3.8, attack=0.5, release=400.0
         )
-
-        # 3. NORMALIZAÇÃO FINAL A 95%
         audio_segment = effects.normalize(audio_segment, headroom=0.45)
-        # ----------------------------------------------------------
 
         mp3_buffer = io.BytesIO()
         audio_segment.export(
@@ -138,7 +144,7 @@ def generate_audio_endpoint():
             io.BytesIO(mp3_buffer.getvalue()),
             mimetype='audio/mpeg'
         ))
-        http_response.headers['X-Model-Used'] = model_nickname
+        http_response.headers['X-Model-Used'] = model_to_use_fullname
         
         return http_response
 
