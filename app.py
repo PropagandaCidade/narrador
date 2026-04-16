@@ -1,6 +1,6 @@
-# app.py - VERSÃO 27.8 - WORKER ENGINE (HIVE STABLE) - MODEL FLEX SUPPORT
+# app.py - VERSÃO 27.9 - WORKER ENGINE (HIVE STABLE) - MODEL NAME CORRECTION
 # LOCAL: Repositório Único (N1, N2, N3, N4, N5)
-# DESCRIÇÃO: Suporte dinâmico para modelos 2.5 e 3.1 no Prompt Lab.
+# DESCRIÇÃO: Correção do mapeamento para o modelo gemini-3.1-flash-tts-preview.
 
 import os
 import io
@@ -31,7 +31,7 @@ def clean_skill_tags(text):
 @app.route('/')
 def home():
     srv = os.environ.get('RAILWAY_SERVICE_NAME', 'Worker')
-    return f"Serviço v27.8 ({srv}) - Hive Multi-Model Support Online."
+    return f"Serviço v27.9 ({srv}) - Gemini 3.1 TTS Ready."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -59,27 +59,26 @@ def generate_audio_endpoint():
         if not text_to_narrate or not voice_name:
             return jsonify({"error": "Texto e voz são obrigatórios."}), 400
 
-        # REVERTED PROMPT LOGIC
+        # Lógica de Prompt (Estilo Estável)
         if custom_prompt:
             final_text_for_api = f"[CONTEXTO/ESTILO DE NARRAÇÃO: {custom_prompt}] {text_to_narrate}"
         else:
             final_text_for_api = text_to_narrate
 
-        # --- NOVA LÓGICA DE MAPEAMENTO DE MODELO (v27.8) ---
-        # 1. Se receber o nome completo do modelo (vindo do Prompt Lab)
+        # --- MAPEAMENTO DE MODELO CORRIGIDO (v27.9) ---
         valid_full_models = [
             'gemini-2.5-flash-preview-tts', 
             'gemini-2.5-pro-preview-tts', 
-            'gemini-3.1-flash-preview-tts'
+            'gemini-3.1-flash-tts-preview' # Nome exato conforme documentação/print
         ]
         
         if model_nickname in valid_full_models:
             model_to_use_fullname = model_nickname
-        # 2. Se receber apelidos (vindo do Dashboard ou Studio)
         else:
+            # Fallback para apelidos curtos do Dashboard
             model_to_use_fullname = "gemini-2.5-pro-preview-tts" if model_nickname in ['pro', 'chirp'] else "gemini-2.5-flash-preview-tts"
             
-        logger.info(f"Worker processando: {origin} | Model: {model_to_use_fullname}")
+        logger.info(f"HIVE Worker: Gerando com {model_to_use_fullname} para {origin}")
 
         client = genai.Client(api_key=api_key)
 
@@ -115,9 +114,9 @@ def generate_audio_endpoint():
                 time.sleep(0.5)
 
         if not audio_data_chunks:
-             return jsonify({"error": "Google indisponível após tentativas."}), 500
+             return jsonify({"error": "Google API não retornou áudio."}), 500
 
-        # --- PROCESSAMENTO ENGINE COMPANDER HI-FI ---
+        # --- PROCESSAMENTO ENGINE HI-FI ---
         full_audio_raw = b''.join(audio_data_chunks)
         audio_segment = AudioSegment.from_raw(
             io.BytesIO(full_audio_raw),

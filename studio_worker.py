@@ -1,6 +1,6 @@
-# studio_worker.py - VERSÃO 30.2 - ENGINE STUDIO PRO (HIVE)
+# studio_worker.py - VERSÃO 30.3 - ENGINE STUDIO PRO (HIVE)
 # LOCAL: studio-engine.up.railway.app
-# DESCRIÇÃO: Suporte dinâmico para modelos 2.5 e 3.1 (Multi-model ready).
+# DESCRIÇÃO: Sincronização de modelos TTS (2.5 e 3.1) com motor de efeitos.
 
 import os
 import io
@@ -30,7 +30,7 @@ def apply_advanced_studio_fx(audio_segment, fx):
     try:
         if not fx: return audio_segment
 
-        # FAST-PATH: Se efeitos são 0 ou OFF, pula o Pedalboard
+        # FAST-PATH: Se efeitos são 0 ou OFF, pula o processamento pesado
         has_reverb = float(fx.get("room_reverb", 0)) > 0.02
         has_delay = fx.get("delay", {}).get("active", False)
         has_mic = str(fx.get("mic_model", "flat")).lower() not in ["padrão_flat", "flat"]
@@ -39,7 +39,7 @@ def apply_advanced_studio_fx(audio_segment, fx):
         if not (has_reverb or has_delay or has_mic or has_warmth):
             return audio_segment
 
-        # CARREGAMENTO SOB DEMANDA
+        # CARREGAMENTO SOB DEMANDA (Para performance)
         import numpy as np
         from pedalboard import Pedalboard, Reverb, Delay, HighShelfFilter, LowShelfFilter, Gain, PeakFilter, Limiter
 
@@ -89,7 +89,7 @@ def apply_advanced_studio_fx(audio_segment, fx):
 
 @app.route('/')
 def home():
-    return "Studio Engine v30.2 (Multi-Model) is online."
+    return "Studio Engine v30.3 (TTS Sync) is online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_studio():
@@ -102,20 +102,20 @@ def generate_audio_studio():
         model_nickname = data.get('model_to_use', 'flash')
         origin = data.get('origin_interface', 'studio_hub')
         
-        # --- MAPEAMENTO DINÂMICO DE MODELO (v30.2) ---
+        # --- MAPEAMENTO DE MODELO CORRIGIDO (v30.3) ---
         valid_full_models = [
             'gemini-2.5-flash-preview-tts', 
             'gemini-2.5-pro-preview-tts', 
-            'gemini-3.1-flash-preview-tts'
+            'gemini-3.1-flash-tts-preview'
         ]
 
         if model_nickname in valid_full_models:
             model_fullname = model_nickname
         else:
-            # Fallback para apelidos do Dashboard/Studio
+            # Fallback para nomes curtos do Dashboard/Studio
             model_fullname = "gemini-2.5-pro-preview-tts" if model_nickname in ['pro', 'chirp'] else "gemini-2.5-flash-preview-tts"
 
-        logger.info(f"Studio Engine: {origin} | Model: {model_fullname}")
+        logger.info(f"Studio Engine: Processando {model_fullname} para {origin}")
 
         # Montagem do prompt
         if prompt:
@@ -142,29 +142,29 @@ def generate_audio_studio():
                 audio_chunks.append(chunk.candidates[0].content.parts[0].inline_data.data)
 
         if not audio_chunks:
-            return jsonify({"error": "Google API falhou no Studio Engine."}), 500
+            return jsonify({"error": "Google API não retornou dados no Studio Engine."}), 500
 
-        # --- PROCESSAMENTO ---
+        # --- PROCESSAMENTO AUDIO ---
         raw_audio = b''.join(audio_chunks)
         seg = AudioSegment.from_raw(io.BytesIO(raw_audio), sample_width=2, frame_rate=24000, channels=1)
 
-        # Normalização leve
+        # Normalização de ganho inicial
         seg = effects.normalize(seg, headroom=2.0)
         
-        # Aplicação de Efeitos
+        # Aplicação de Efeitos Profissionais
         seg = apply_advanced_studio_fx(seg, data.get('studio_fx', {}))
 
-        # Exportação Hi-Fi
+        # Exportação MP3 Hi-Fi
         out = io.BytesIO()
         seg.export(out, format="mp3", bitrate="128k", parameters=["-ar", "44100"])
         
         res = make_response(send_file(io.BytesIO(out.getvalue()), mimetype='audio/mpeg'))
-        res.headers['X-Studio-Engine'] = "Active-v30.2"
+        res.headers['X-Studio-Engine'] = "Active-v30.3"
         res.headers['X-Model-Used'] = model_fullname
         return res
 
     except Exception as e:
-        logger.error(f"Erro Crítico: {str(e)}")
+        logger.error(f"Erro Crítico no Studio Engine: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
