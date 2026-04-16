@@ -66,7 +66,7 @@ def generate_audio_endpoint():
             final_text_for_api = text_to_narrate
 
         # MODEL MAPPING (Gemini 2.5 - Sem alterações)
-        model_to_use_fullname = "gemini-2.5-pro-preview-tts" if model_nickname in ['pro', 'chirp'] else "gemini-2.5-flash-preview-tts"
+        model_to_use_fullname = "gemini-2.5-pro-preview-tts" if model_nickname in ['pro', 'chirp'] else "gemini-3.1-flash-tts-preview"
             
         client = genai.Client(api_key=api_key)
 
