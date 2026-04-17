@@ -1,6 +1,7 @@
-# app.py - VERSÃO 28.7 - WORKER ENGINE (HIVE STABLE) - AGGRESSIVE SAFETY BYPASS
+# app.py - VERSÃO 28.8 - WORKER ENGINE (HIVE STABLE) - AGGRESSIVE SAFETY BYPASS
 # LOCAL: Repositório Único (N1, N2, N3, N4, N5)
-# DESCRIÇÃO: Ajuste de categorias de segurança e limpeza de prompt para o modelo 3.1.
+# DESCRIÇÃO: Ajuste de Schema (voice_name) para compatibilidade universal.
+# FIX: 'voiceName' to 'voice_name' in prebuiltVoiceConfig.
 
 import os
 import io
@@ -30,7 +31,7 @@ def clean_skill_tags(text):
 @app.route('/')
 def home():
     srv = os.environ.get('RAILWAY_SERVICE_NAME', 'Worker')
-    return f"Serviço v28.7 ({srv}) - Safety Bypass v2 Online."
+    return f"Serviço v28.8 ({srv}) - Fixed Schema v1 Online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -56,20 +57,18 @@ def generate_audio_endpoint():
         if not text_to_narrate or not voice_name:
             return jsonify({"error": "Texto e voz obrigatórios."}), 400
 
-        # --- AJUSTE DE PROMPT PARA MODELO 3.1 (Menos bloqueios) ---
+        # --- AJUSTE DE PROMPT PARA MODELO 3.1 ---
         if "3.1" in model_nickname:
-            # No 3.1, se houver instrução, usamos uma estrutura mais natural e menos "comando"
             if custom_prompt:
                 final_text_for_api = f"Instrução de narração: {custom_prompt}\n\nTexto para narrar: {text_to_narrate}"
             else:
                 final_text_for_api = text_to_narrate
             model_fullname = "gemini-3.1-flash-tts-preview"
         else:
-            # Padrão estável para 2.5
             final_text_for_api = f"[CONTEXTO/ESTILO DE NARRAÇÃO: {custom_prompt}] {text_to_narrate}" if custom_prompt else text_to_narrate
             model_fullname = "gemini-2.5-pro-preview-tts" if "pro" in model_nickname else "gemini-2.5-flash-preview-tts"
 
-        logger.info(f"HIVE Worker: {origin} -> {model_fullname}")
+        logger.info(f"HIVE Worker: {origin} -> {model_fullname} (REST Fix)")
 
         # --- CHAMADA REST COM SAFETY MAX OVERRIDE ---
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_fullname}:generateContent?key={api_key}"
@@ -79,7 +78,11 @@ def generate_audio_endpoint():
             "generationConfig": {
                 "responseModalities": ["AUDIO"],
                 "speechConfig": {
-                    "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice_name}}
+                    "voiceConfig": {
+                        "prebuiltVoiceConfig": {
+                            "voice_name": voice_name # FIX: de voiceName para voice_name
+                        }
+                    }
                 }
             },
             "safetySettings": [
@@ -105,7 +108,7 @@ def generate_audio_endpoint():
                             candidate = res_json['candidates'][0]
                             
                             if candidate.get('finishReason') in ['SAFETY', 'OTHER']:
-                                return jsonify({"error": f"Conteúdo bloqueado pelo filtro de segurança do Google (Motivo: {candidate.get('finishReason')})."}), 400
+                                return jsonify({"error": f"Conteúdo bloqueado pelo filtro do Google ({candidate.get('finishReason')})."}), 400
                                 
                             parts = candidate.get('content', {}).get('parts', [])
                             if parts and 'inlineData' in parts[0]:
@@ -114,9 +117,7 @@ def generate_audio_endpoint():
                         
                         if 'promptFeedback' in res_json and res_json['promptFeedback'].get('blockReason'):
                             reason = res_json['promptFeedback']['blockReason']
-                            # Se for bloqueado, tentamos uma última vez SEM o custom_prompt como fallback desesperado
                             if attempt == 0 and custom_prompt:
-                                logger.warning("HIVE: Prompt bloqueado. Tentando fallback sem instruções.")
                                 payload["contents"][0]["parts"][0]["text"] = text_to_narrate
                                 continue
                             return jsonify({"error": f"O Google não permitiu este roteiro (Block: {reason})."}), 400
@@ -132,7 +133,7 @@ def generate_audio_endpoint():
                 time.sleep(1)
 
         if not response_audio_bytes:
-            return jsonify({"error": "Não foi possível gerar áudio. O filtro de segurança da Google é muito rigoroso para este texto."}), 500
+            return jsonify({"error": "Erro na geração do áudio (Filtros rigorosos)."}), 500
 
         # --- MOTOR HI-FI ---
         audio_segment = AudioSegment.from_raw(io.BytesIO(response_audio_bytes), sample_width=2, frame_rate=24000, channels=1)

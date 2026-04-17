@@ -1,6 +1,7 @@
-# studio_worker.py - VERSÃO 30.9 - ENGINE STUDIO PRO (HIVE)
+# studio_worker.py - VERSÃO 30.10 - ENGINE STUDIO PRO (HIVE)
 # LOCAL: studio-engine.up.railway.app
-# DESCRIÇÃO: Implementação REST com Safety Bypass v2 e Fallback de bloqueio para 3.1.
+# DESCRIÇÃO: Correção de Schema JSON para compatibilidade com Gemini 2.5 e 3.1.
+# FIX: 'voiceName' to 'voice_name' in speechConfig.
 
 import os
 import io
@@ -81,12 +82,12 @@ def apply_advanced_studio_fx(audio_segment, fx):
         return AudioSegment(processed.tobytes(), frame_rate=sr, sample_width=2, channels=2)
 
     except Exception as e:
-        logger.error(f"Erro no FX Studio (Bypass): {str(e)}")
+        logger.error(f"Erro no FX Studio: {str(e)}")
         return audio_segment
 
 @app.route('/')
 def home():
-    return "Studio Engine v30.9 (Safety Bypass v2) is online."
+    return "Studio Engine v30.10 (Fixed Schema) is online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_studio():
@@ -105,26 +106,28 @@ def generate_audio_studio():
         except:
             temperature = 0.85
 
-        # --- MODEL MAPPING & PROMPT CLEANING (v30.9) ---
+        # --- MODEL MAPPING ---
         if "3.1" in model_nickname:
             model_fullname = "gemini-3.1-flash-tts-preview"
-            # Formato mais amigável para o filtro de segurança do 3.1
             final_prompt = f"Instrução de narração: {prompt}\n\nTexto para narrar: {text}" if prompt else text
         else:
             model_fullname = "gemini-2.5-pro-preview-tts" if "pro" in model_nickname else "gemini-2.5-flash-preview-tts"
             final_prompt = f"[CONTEXTO/ESTILO DE NARRAÇÃO: {prompt}] {text}" if prompt else text
 
-        logger.info(f"Studio Engine: {origin} -> {model_fullname} (REST + Bypass v2)")
+        logger.info(f"Studio Engine: {origin} -> {model_fullname} (REST Fix)")
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_fullname}:generateContent?key={api_key}"
         
-        # Payload com Safety Max Override
+        # --- CORREÇÃO DE SCHEMA AQUI ---
+        # Alterado voiceName para voice_name para evitar erro de 'Cannot find field'
         payload = {
             "contents": [{"parts": [{"text": final_prompt}]}],
             "generationConfig": {
                 "responseModalities": ["AUDIO"],
                 "speechConfig": {
-                    "voiceConfig": {"voiceName": voice_name}
+                    "voiceConfig": {
+                        "voice_name": voice_name
+                    }
                 }
             },
             "safetySettings": [
@@ -149,11 +152,8 @@ def generate_audio_studio():
                         if 'candidates' in res_json and len(res_json['candidates']) > 0:
                             candidate = res_json['candidates'][0]
                             
-                            # Verificação de bloqueio por segurança no candidato
                             if candidate.get('finishReason') in ['SAFETY', 'OTHER']:
-                                logger.warning(f"Studio Engine: Bloqueado no Candidato ({candidate.get('finishReason')})")
                                 if attempt == 0 and prompt:
-                                    logger.info("Tentando Fallback sem instruções...")
                                     payload["contents"][0]["parts"][0]["text"] = text
                                     continue
                                 return jsonify({"error": "Google bloqueou a geração por segurança."}), 400
@@ -163,15 +163,11 @@ def generate_audio_studio():
                                 response_audio_bytes = base64.b64decode(parts[0]['inlineData']['data'])
                                 break
                         
-                        # Verificação de bloqueio de prompt (PROHIBITED_CONTENT)
                         if 'promptFeedback' in res_json and res_json['promptFeedback'].get('blockReason'):
-                            reason = res_json['promptFeedback']['blockReason']
-                            logger.warning(f"Studio Engine: Bloqueio de Prompt ({reason})")
                             if attempt == 0 and prompt:
-                                logger.info("Tentando Fallback sem instruções...")
                                 payload["contents"][0]["parts"][0]["text"] = text
                                 continue
-                            return jsonify({"error": f"Conteúdo Proibido (Block: {reason})"}), 400
+                            return jsonify({"error": "Conteúdo Proibido pelo Google."}), 400
                     else:
                         err_msg = res_json.get('error', {}).get('message', 'Erro API Google')
                         if attempt == max_retries - 1:
@@ -183,23 +179,20 @@ def generate_audio_studio():
                 time.sleep(1)
 
         if not response_audio_bytes:
-            return jsonify({"error": "Não foi possível extrair o áudio. O filtro do Google bloqueou o roteiro."}), 500
+            return jsonify({"error": "Falha na extração de áudio."}), 500
 
         # --- PROCESSAMENTO AUDIO STUDIO ---
         seg = AudioSegment.from_raw(io.BytesIO(response_audio_bytes), sample_width=2, frame_rate=24000, channels=1)
-
-        # Normalização inicial
         seg = effects.normalize(seg, headroom=2.0)
         
-        # Aplicação de Efeitos (Reverb, Delay, Mic, Gain)
+        # Aplicação de FX Pedalboard
         seg = apply_advanced_studio_fx(seg, data.get('studio_fx', {}))
 
-        # Exportação MP3 Hi-Fi
         out = io.BytesIO()
         seg.export(out, format="mp3", bitrate="128k", parameters=["-ar", "44100"])
         
         res = make_response(send_file(io.BytesIO(out.getvalue()), mimetype='audio/mpeg'))
-        res.headers['X-Studio-Engine'] = "Active-v30.9"
+        res.headers['X-Studio-Engine'] = "Active-v30.10"
         res.headers['X-Model-Used'] = model_fullname
         return res
 
