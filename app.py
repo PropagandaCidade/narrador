@@ -1,18 +1,17 @@
-# app.py - VERSÃO 28.2 - WORKER ENGINE (HIVE STABLE) - DEFINITIVE 3.1 FIX
+# app.py - VERSÃO 28.3 - WORKER ENGINE (HIVE STABLE) - DIRECT REST PARITY
 # LOCAL: Repositório Único (N1, N2, N3, N4, N5)
-# DESCRIÇÃO: Paridade total com o sucesso do teste isolado PHP para o modelo 3.1.
+# DESCRIÇÃO: Substituição do SDK por chamada REST direta para paridade total com o teste PHP.
 
 import os
 import io
 import logging
 import re
 import time
+import base64
+import httpx
 
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
-
-from google import genai
-from google.genai import types
 from pydub import AudioSegment, effects
 
 # 1. CONFIGURAÇÃO DE LOGS
@@ -31,7 +30,7 @@ def clean_skill_tags(text):
 @app.route('/')
 def home():
     srv = os.environ.get('RAILWAY_SERVICE_NAME', 'Worker')
-    return f"Serviço v28.2 ({srv}) - Hive 3.1 Stable Support Online."
+    return f"Serviço v28.3 ({srv}) - Direct REST Mode Online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -59,14 +58,13 @@ def generate_audio_endpoint():
         if not text_to_narrate or not voice_name:
             return jsonify({"error": "Texto e voz são obrigatórios."}), 400
 
-        # Montagem do Prompt (Padrão Estável)
+        # Montagem do prompt
         if custom_prompt:
             final_text_for_api = f"[CONTEXTO/ESTILO DE NARRAÇÃO: {custom_prompt}] {text_to_narrate}"
         else:
             final_text_for_api = text_to_narrate
 
-        # --- MODEL MAPPING REFINADO (v28.2) ---
-        # Mapeamento exato baseado no sucesso do teste isolado
+        # --- MODEL SHIELD (v28.3) ---
         if "3.1" in model_nickname:
             model_to_use_fullname = "gemini-3.1-flash-tts-preview"
         elif "2.5" in model_nickname and "pro" in model_nickname:
@@ -77,54 +75,56 @@ def generate_audio_endpoint():
             model_to_use_fullname = "gemini-2.5-pro-preview-tts"
         else:
             model_to_use_fullname = "gemini-2.5-flash-preview-tts"
-            
-        logger.info(f"HIVE: {origin} requisitando {model_to_use_fullname}")
 
-        # Configuração idêntica à documentação oficial
-        client = genai.Client(api_key=api_key)
-        generate_config = types.GenerateContentConfig(
-            temperature=temperature,
-            response_modalities=["AUDIO"],
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
-                )
-            )
-        )
+        logger.info(f"HIVE Worker: {origin} -> REST Request: {model_to_use_fullname}")
 
-        # GERAÇÃO UNARY (Processo completo de uma vez)
+        # --- CHAMADA REST DIRETA (Paridade com PHP) ---
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_to_use_fullname}:generateContent?key={api_key}"
+        
+        payload = {
+            "contents": [
+                {"parts": [{"text": final_text_for_api}]}
+            ],
+            "generationConfig": {
+                "responseModalities": ["AUDIO"],
+                "speechConfig": {
+                    "voiceConfig": {
+                        "prebuiltVoiceConfig": {"voiceName": voice_name}
+                    }
+                }
+            }
+        }
+
         response_audio_bytes = None
         max_retries = 2
-        
-        for attempt in range(max_retries):
-            try:
-                # Chamada via SDK para v1beta
-                response = client.models.generate_content(
-                    model=model_to_use_fullname, 
-                    contents=final_text_for_api, 
-                    config=generate_config
-                )
-                
-                # Extração segura dos dados binários
-                if (response.candidates and 
-                    response.candidates[0].content and 
-                    response.candidates[0].content.parts):
+
+        with httpx.Client(timeout=120.0) as client:
+            for attempt in range(max_retries):
+                try:
+                    res = client.post(url, json=payload)
                     
-                    part = response.candidates[0].content.parts[0]
-                    if part.inline_data:
-                        response_audio_bytes = part.inline_data.data
+                    if res.status_code == 200:
+                        res_json = res.json()
+                        # Extração do base64 conforme estrutura do teste PHP
+                        b64_data = res_json['candidates'][0]['content']['parts'][0]['inlineData']['data']
+                        response_audio_bytes = base64.b64decode(b64_data)
                         break
-                    
-            except Exception as e:
-                logger.warning(f"Tentativa {attempt+1} falhou para {model_to_use_fullname}: {str(e)}")
-                if attempt == max_retries - 1: raise e
+                    else:
+                        error_msg = res.json().get('error', {}).get('message', 'Erro desconhecido na API')
+                        logger.warning(f"Tentativa {attempt+1} falhou: {error_msg}")
+                        if attempt == max_retries - 1:
+                            return jsonify({"error": f"Google API Error: {error_msg}"}), res.status_code
+                
+                except Exception as e:
+                    logger.error(f"Erro na conexão REST: {str(e)}")
+                    if attempt == max_retries - 1: raise e
+                
                 time.sleep(1)
 
         if not response_audio_bytes:
-             return jsonify({"error": "O Google não devolveu dados de áudio para este modelo."}), 500
+            return jsonify({"error": "Google não retornou dados binários via REST."}), 500
 
         # --- MOTOR DE PROCESSAMENTO HI-FI ---
-        # Lemos os bytes como PCM 24000Hz (Padrão do Gemini TTS)
         audio_segment = AudioSegment.from_raw(
             io.BytesIO(response_audio_bytes),
             sample_width=2,
@@ -132,14 +132,14 @@ def generate_audio_endpoint():
             channels=1
         )
 
-        # Processamento de áudio para Masterização
+        # Processamento profissional
         audio_segment = effects.normalize(audio_segment, headroom=3.0)
         audio_segment = effects.compress_dynamic_range(
             audio_segment, threshold=-9.0, ratio=3.8, attack=0.5, release=400.0
         )
         audio_segment = effects.normalize(audio_segment, headroom=0.45)
 
-        # Exportação para MP3 final
+        # Exportação MP3
         mp3_buffer = io.BytesIO()
         audio_segment.export(
             mp3_buffer, 
