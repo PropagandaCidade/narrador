@@ -1,6 +1,6 @@
-# app.py - VERSÃO 27.9 - WORKER ENGINE (HIVE STABLE) - MODEL NAME CORRECTION
+# app.py - VERSÃO 28.0 - WORKER ENGINE (HIVE STABLE) - TOTAL MODEL SHIELD
 # LOCAL: Repositório Único (N1, N2, N3, N4, N5)
-# DESCRIÇÃO: Correção do mapeamento para o modelo gemini-3.1-flash-tts-preview.
+# DESCRIÇÃO: Blindagem de nomes de modelos e paridade com Google AI Studio (TTS-PREVIEW).
 
 import os
 import io
@@ -31,7 +31,7 @@ def clean_skill_tags(text):
 @app.route('/')
 def home():
     srv = os.environ.get('RAILWAY_SERVICE_NAME', 'Worker')
-    return f"Serviço v27.9 ({srv}) - Gemini 3.1 TTS Ready."
+    return f"Serviço v28.0 ({srv}) - Hive Model Shield Online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -47,7 +47,7 @@ def generate_audio_endpoint():
         text_raw = data.get('text', '')
         text_to_narrate = clean_skill_tags(text_raw)
         voice_name = data.get('voice')
-        model_nickname = data.get('model_to_use', 'flash')
+        model_nickname = str(data.get('model_to_use', 'flash')).lower()
         custom_prompt = data.get('custom_prompt', '').strip()
         origin = data.get('origin_interface', 'dashboard')
         
@@ -59,26 +59,26 @@ def generate_audio_endpoint():
         if not text_to_narrate or not voice_name:
             return jsonify({"error": "Texto e voz são obrigatórios."}), 400
 
-        # Lógica de Prompt (Estilo Estável)
+        # REVERTED PROMPT LOGIC (v21.1/27.1 style for stability)
         if custom_prompt:
             final_text_for_api = f"[CONTEXTO/ESTILO DE NARRAÇÃO: {custom_prompt}] {text_to_narrate}"
         else:
             final_text_for_api = text_to_narrate
 
-        # --- MAPEAMENTO DE MODELO CORRIGIDO (v27.9) ---
-        valid_full_models = [
-            'gemini-2.5-flash-preview-tts', 
-            'gemini-2.5-pro-preview-tts', 
-            'gemini-3.1-flash-tts-preview' # Nome exato conforme documentação/print
-        ]
-        
-        if model_nickname in valid_full_models:
-            model_to_use_fullname = model_nickname
+        # --- BLINDAGEM DE MODELOS (v28.0) ---
+        # Mapeia as entradas do PHP/JS para os nomes oficiais da API do Google
+        if "3.1" in model_nickname and "flash" in model_nickname:
+            model_to_use_fullname = "gemini-3.1-flash-tts-preview"
+        elif "2.5" in model_nickname and "pro" in model_nickname:
+            model_to_use_fullname = "gemini-2.5-pro-preview-tts"
+        elif "2.5" in model_nickname and "flash" in model_nickname:
+            model_to_use_fullname = "gemini-2.5-flash-preview-tts"
+        elif model_nickname in ['pro', 'chirp']:
+            model_to_use_fullname = "gemini-2.5-pro-preview-tts"
         else:
-            # Fallback para apelidos curtos do Dashboard
-            model_to_use_fullname = "gemini-2.5-pro-preview-tts" if model_nickname in ['pro', 'chirp'] else "gemini-2.5-flash-preview-tts"
+            model_to_use_fullname = "gemini-2.5-flash-preview-tts"
             
-        logger.info(f"HIVE Worker: Gerando com {model_to_use_fullname} para {origin}")
+        logger.info(f"HIVE Worker: {origin} utilizando modelo real -> {model_to_use_fullname}")
 
         client = genai.Client(api_key=api_key)
 
@@ -92,13 +92,18 @@ def generate_audio_endpoint():
             )
         )
 
+        # LÓGICA DE TENTATIVA AUTOMÁTICA (RETRY) PARA ERROS ALEATÓRIOS DO GOOGLE
         audio_data_chunks = []
         max_retries = 2
         
         for attempt in range(max_retries):
             try:
                 audio_data_chunks = [] 
-                for chunk in client.models.generate_content_stream(model=model_to_use_fullname, contents=final_text_for_api, config=generate_config):
+                for chunk in client.models.generate_content_stream(
+                    model=model_to_use_fullname, 
+                    contents=final_text_for_api, 
+                    config=generate_config
+                ):
                     if (chunk.candidates and chunk.candidates[0].content and 
                         chunk.candidates[0].content.parts and 
                         chunk.candidates[0].content.parts[0].inline_data):
@@ -114,9 +119,9 @@ def generate_audio_endpoint():
                 time.sleep(0.5)
 
         if not audio_data_chunks:
-             return jsonify({"error": "Google API não retornou áudio."}), 500
+             return jsonify({"error": "Google API não retornou áudio (Stream Empty)."}), 500
 
-        # --- PROCESSAMENTO ENGINE HI-FI ---
+        # --- PROCESSAMENTO ENGINE COMPANDER HI-FI ---
         full_audio_raw = b''.join(audio_data_chunks)
         audio_segment = AudioSegment.from_raw(
             io.BytesIO(full_audio_raw),
@@ -125,12 +130,18 @@ def generate_audio_endpoint():
             channels=1
         )
 
+        # 1. PRÉ-NORMALIZAÇÃO (-3dB)
         audio_segment = effects.normalize(audio_segment, headroom=3.0)
+
+        # 2. COMPRESSOR COMPANDER (RealAudio Preset)
         audio_segment = effects.compress_dynamic_range(
             audio_segment, threshold=-9.0, ratio=3.8, attack=0.5, release=400.0
         )
+
+        # 3. NORMALIZAÇÃO FINAL A 95%
         audio_segment = effects.normalize(audio_segment, headroom=0.45)
 
+        # EXPORTAÇÃO
         mp3_buffer = io.BytesIO()
         audio_segment.export(
             mp3_buffer, 

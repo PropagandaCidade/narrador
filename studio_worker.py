@@ -1,6 +1,6 @@
-# studio_worker.py - VERSÃO 30.3 - ENGINE STUDIO PRO (HIVE)
+# studio_worker.py - VERSÃO 30.4 - ENGINE STUDIO PRO (HIVE)
 # LOCAL: studio-engine.up.railway.app
-# DESCRIÇÃO: Sincronização de modelos TTS (2.5 e 3.1) com motor de efeitos.
+# DESCRIÇÃO: Blindagem total de modelos (v28.0 paridade) com motor de efeitos Studio.
 
 import os
 import io
@@ -30,7 +30,7 @@ def apply_advanced_studio_fx(audio_segment, fx):
     try:
         if not fx: return audio_segment
 
-        # FAST-PATH: Se efeitos são 0 ou OFF, pula o processamento pesado
+        # FAST-PATH: Verificação de ativação de efeitos
         has_reverb = float(fx.get("room_reverb", 0)) > 0.02
         has_delay = fx.get("delay", {}).get("active", False)
         has_mic = str(fx.get("mic_model", "flat")).lower() not in ["padrão_flat", "flat"]
@@ -39,7 +39,7 @@ def apply_advanced_studio_fx(audio_segment, fx):
         if not (has_reverb or has_delay or has_mic or has_warmth):
             return audio_segment
 
-        # CARREGAMENTO SOB DEMANDA (Para performance)
+        # CARREGAMENTO SOB DEMANDA
         import numpy as np
         from pedalboard import Pedalboard, Reverb, Delay, HighShelfFilter, LowShelfFilter, Gain, PeakFilter, Limiter
 
@@ -89,7 +89,7 @@ def apply_advanced_studio_fx(audio_segment, fx):
 
 @app.route('/')
 def home():
-    return "Studio Engine v30.3 (TTS Sync) is online."
+    return "Studio Engine v30.4 (Model Shield) is online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_studio():
@@ -99,23 +99,22 @@ def generate_audio_studio():
         
         text = data.get('text', '')
         prompt = data.get('custom_prompt', '')
-        model_nickname = data.get('model_to_use', 'flash')
+        model_nickname = str(data.get('model_to_use', 'flash')).lower()
         origin = data.get('origin_interface', 'studio_hub')
         
-        # --- MAPEAMENTO DE MODELO CORRIGIDO (v30.3) ---
-        valid_full_models = [
-            'gemini-2.5-flash-preview-tts', 
-            'gemini-2.5-pro-preview-tts', 
-            'gemini-3.1-flash-tts-preview'
-        ]
-
-        if model_nickname in valid_full_models:
-            model_fullname = model_nickname
+        # --- BLINDAGEM DE MODELOS (v30.4) ---
+        if "3.1" in model_nickname and "flash" in model_nickname:
+            model_fullname = "gemini-3.1-flash-tts-preview"
+        elif "2.5" in model_nickname and "pro" in model_nickname:
+            model_fullname = "gemini-2.5-pro-preview-tts"
+        elif "2.5" in model_nickname and "flash" in model_nickname:
+            model_fullname = "gemini-2.5-flash-preview-tts"
+        elif model_nickname in ['pro', 'chirp']:
+            model_fullname = "gemini-2.5-pro-preview-tts"
         else:
-            # Fallback para nomes curtos do Dashboard/Studio
-            model_fullname = "gemini-2.5-pro-preview-tts" if model_nickname in ['pro', 'chirp'] else "gemini-2.5-flash-preview-tts"
+            model_fullname = "gemini-2.5-flash-preview-tts"
 
-        logger.info(f"Studio Engine: Processando {model_fullname} para {origin}")
+        logger.info(f"Studio Engine: {origin} utilizando modelo real -> {model_fullname}")
 
         # Montagem do prompt
         if prompt:
@@ -148,10 +147,10 @@ def generate_audio_studio():
         raw_audio = b''.join(audio_chunks)
         seg = AudioSegment.from_raw(io.BytesIO(raw_audio), sample_width=2, frame_rate=24000, channels=1)
 
-        # Normalização de ganho inicial
+        # Normalização inicial
         seg = effects.normalize(seg, headroom=2.0)
         
-        # Aplicação de Efeitos Profissionais
+        # Aplicação de Efeitos (Pula se não houver efeitos no JSON)
         seg = apply_advanced_studio_fx(seg, data.get('studio_fx', {}))
 
         # Exportação MP3 Hi-Fi
@@ -159,7 +158,7 @@ def generate_audio_studio():
         seg.export(out, format="mp3", bitrate="128k", parameters=["-ar", "44100"])
         
         res = make_response(send_file(io.BytesIO(out.getvalue()), mimetype='audio/mpeg'))
-        res.headers['X-Studio-Engine'] = "Active-v30.3"
+        res.headers['X-Studio-Engine'] = "Active-v30.4"
         res.headers['X-Model-Used'] = model_fullname
         return res
 
