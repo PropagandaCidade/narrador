@@ -1,7 +1,7 @@
-# studio_worker.py - VERSÃO 30.10 - ENGINE STUDIO PRO (HIVE)
+# studio_worker.py - VERSÃO 30.11 - ENGINE STUDIO PRO (HIVE)
 # LOCAL: studio-engine.up.railway.app
-# DESCRIÇÃO: Correção de Schema JSON para compatibilidade com Gemini 2.5 e 3.1.
-# FIX: 'voiceName' to 'voice_name' in speechConfig.
+# DESCRIÇÃO: Correção Final de Hierarquia JSON (3 camadas) para Gemini 2.5 e 3.1.
+# FIX: Adicionado 'prebuiltVoiceConfig' obrigatório.
 
 import os
 import io
@@ -87,7 +87,7 @@ def apply_advanced_studio_fx(audio_segment, fx):
 
 @app.route('/')
 def home():
-    return "Studio Engine v30.10 (Fixed Schema) is online."
+    return "Studio Engine v30.11 (Fixed Hierarchy) is online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_studio():
@@ -101,11 +101,6 @@ def generate_audio_studio():
         voice_name = str(data.get('voice', 'Kore')).capitalize()
         origin = data.get('origin_interface', 'studio_hub')
         
-        try:
-            temperature = float(data.get('temperature', 0.85))
-        except:
-            temperature = 0.85
-
         # --- MODEL MAPPING ---
         if "3.1" in model_nickname:
             model_fullname = "gemini-3.1-flash-tts-preview"
@@ -114,19 +109,20 @@ def generate_audio_studio():
             model_fullname = "gemini-2.5-pro-preview-tts" if "pro" in model_nickname else "gemini-2.5-flash-preview-tts"
             final_prompt = f"[CONTEXTO/ESTILO DE NARRAÇÃO: {prompt}] {text}" if prompt else text
 
-        logger.info(f"Studio Engine: {origin} -> {model_fullname} (REST Fix)")
+        logger.info(f"Studio Engine: {origin} -> {model_fullname} (Full Schema Fix)")
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_fullname}:generateContent?key={api_key}"
         
-        # --- CORREÇÃO DE SCHEMA AQUI ---
-        # Alterado voiceName para voice_name para evitar erro de 'Cannot find field'
+        # --- HIERARQUIA CORRETA DE 3 NÍVEIS ---
         payload = {
             "contents": [{"parts": [{"text": final_prompt}]}],
             "generationConfig": {
                 "responseModalities": ["AUDIO"],
                 "speechConfig": {
                     "voiceConfig": {
-                        "voice_name": voice_name
+                        "prebuiltVoiceConfig": {
+                            "voiceName": voice_name
+                        }
                     }
                 }
             },
@@ -162,24 +158,16 @@ def generate_audio_studio():
                             if parts and 'inlineData' in parts[0]:
                                 response_audio_bytes = base64.b64decode(parts[0]['inlineData']['data'])
                                 break
-                        
-                        if 'promptFeedback' in res_json and res_json['promptFeedback'].get('blockReason'):
-                            if attempt == 0 and prompt:
-                                payload["contents"][0]["parts"][0]["text"] = text
-                                continue
-                            return jsonify({"error": "Conteúdo Proibido pelo Google."}), 400
                     else:
                         err_msg = res_json.get('error', {}).get('message', 'Erro API Google')
                         if attempt == max_retries - 1:
                             return jsonify({"error": err_msg}), res.status_code
-                
                 except Exception as e:
                     if attempt == max_retries - 1: raise e
-                
                 time.sleep(1)
 
         if not response_audio_bytes:
-            return jsonify({"error": "Falha na extração de áudio."}), 500
+            return jsonify({"error": "Falha na geração (Possível bloqueio de roteiro)."}), 500
 
         # --- PROCESSAMENTO AUDIO STUDIO ---
         seg = AudioSegment.from_raw(io.BytesIO(response_audio_bytes), sample_width=2, frame_rate=24000, channels=1)
@@ -192,7 +180,7 @@ def generate_audio_studio():
         seg.export(out, format="mp3", bitrate="128k", parameters=["-ar", "44100"])
         
         res = make_response(send_file(io.BytesIO(out.getvalue()), mimetype='audio/mpeg'))
-        res.headers['X-Studio-Engine'] = "Active-v30.10"
+        res.headers['X-Studio-Engine'] = "Active-v30.11"
         res.headers['X-Model-Used'] = model_fullname
         return res
 
