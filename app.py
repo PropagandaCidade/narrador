@@ -1,6 +1,6 @@
-# app.py - VERSÃO 28.0 - WORKER ENGINE (HIVE STABLE) - TOTAL MODEL SHIELD
+# app.py - VERSÃO 28.1 - WORKER ENGINE (HIVE STABLE) - UNARY GENERATION FIX
 # LOCAL: Repositório Único (N1, N2, N3, N4, N5)
-# DESCRIÇÃO: Blindagem de nomes de modelos e paridade com Google AI Studio (TTS-PREVIEW).
+# DESCRIÇÃO: Mudança para generate_content (Unary) para paridade total com AI Studio.
 
 import os
 import io
@@ -31,7 +31,7 @@ def clean_skill_tags(text):
 @app.route('/')
 def home():
     srv = os.environ.get('RAILWAY_SERVICE_NAME', 'Worker')
-    return f"Serviço v28.0 ({srv}) - Hive Model Shield Online."
+    return f"Serviço v28.1 ({srv}) - Unary Generation Ready."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -59,15 +59,14 @@ def generate_audio_endpoint():
         if not text_to_narrate or not voice_name:
             return jsonify({"error": "Texto e voz são obrigatórios."}), 400
 
-        # REVERTED PROMPT LOGIC (v21.1/27.1 style for stability)
+        # Lógica de montagem do Prompt
         if custom_prompt:
             final_text_for_api = f"[CONTEXTO/ESTILO DE NARRAÇÃO: {custom_prompt}] {text_to_narrate}"
         else:
             final_text_for_api = text_to_narrate
 
-        # --- BLINDAGEM DE MODELOS (v28.0) ---
-        # Mapeia as entradas do PHP/JS para os nomes oficiais da API do Google
-        if "3.1" in model_nickname and "flash" in model_nickname:
+        # --- MODEL SHIELD (v28.1) ---
+        if "3.1" in model_nickname:
             model_to_use_fullname = "gemini-3.1-flash-tts-preview"
         elif "2.5" in model_nickname and "pro" in model_nickname:
             model_to_use_fullname = "gemini-2.5-pro-preview-tts"
@@ -78,13 +77,13 @@ def generate_audio_endpoint():
         else:
             model_to_use_fullname = "gemini-2.5-flash-preview-tts"
             
-        logger.info(f"HIVE Worker: {origin} utilizando modelo real -> {model_to_use_fullname}")
+        logger.info(f"HIVE Worker: {origin} -> Requisitando {model_to_use_fullname} (Unary Mode)")
 
         client = genai.Client(api_key=api_key)
 
         generate_config = types.GenerateContentConfig(
             temperature=temperature,
-            response_modalities=["audio"],
+            response_modalities=["AUDIO"], # Uppercase para paridade total com documentação
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
@@ -92,56 +91,48 @@ def generate_audio_endpoint():
             )
         )
 
-        # LÓGICA DE TENTATIVA AUTOMÁTICA (RETRY) PARA ERROS ALEATÓRIOS DO GOOGLE
-        audio_data_chunks = []
+        # GERAÇÃO UNARY (generate_content) - Resolve o problema de "Stream Empty"
+        response_audio_raw = None
         max_retries = 2
         
         for attempt in range(max_retries):
             try:
-                audio_data_chunks = [] 
-                for chunk in client.models.generate_content_stream(
+                response = client.models.generate_content(
                     model=model_to_use_fullname, 
                     contents=final_text_for_api, 
                     config=generate_config
-                ):
-                    if (chunk.candidates and chunk.candidates[0].content and 
-                        chunk.candidates[0].content.parts and 
-                        chunk.candidates[0].content.parts[0].inline_data):
-                        audio_data_chunks.append(chunk.candidates[0].content.parts[0].inline_data.data)
+                )
                 
-                if audio_data_chunks:
+                # Extração do áudio do candidato
+                if (response.candidates and response.candidates[0].content and 
+                    response.candidates[0].content.parts and 
+                    response.candidates[0].content.parts[0].inline_data):
+                    response_audio_raw = response.candidates[0].content.parts[0].inline_data.data
                     break 
                     
             except Exception as e:
                 logger.warning(f"Tentativa {attempt+1} falhou para {model_to_use_fullname}: {str(e)}")
-                if attempt == max_retries - 1: 
-                    raise e
-                time.sleep(0.5)
+                if attempt == max_retries - 1: raise e
+                time.sleep(1)
 
-        if not audio_data_chunks:
-             return jsonify({"error": "Google API não retornou áudio (Stream Empty)."}), 500
+        if not response_audio_raw:
+             return jsonify({"error": "Google API não retornou dados de áudio."}), 500
 
         # --- PROCESSAMENTO ENGINE COMPANDER HI-FI ---
-        full_audio_raw = b''.join(audio_data_chunks)
         audio_segment = AudioSegment.from_raw(
-            io.BytesIO(full_audio_raw),
+            io.BytesIO(response_audio_raw),
             sample_width=2,
             frame_rate=24000,
             channels=1
         )
 
-        # 1. PRÉ-NORMALIZAÇÃO (-3dB)
         audio_segment = effects.normalize(audio_segment, headroom=3.0)
-
-        # 2. COMPRESSOR COMPANDER (RealAudio Preset)
         audio_segment = effects.compress_dynamic_range(
             audio_segment, threshold=-9.0, ratio=3.8, attack=0.5, release=400.0
         )
-
-        # 3. NORMALIZAÇÃO FINAL A 95%
         audio_segment = effects.normalize(audio_segment, headroom=0.45)
 
-        # EXPORTAÇÃO
+        # EXPORTAÇÃO MP3
         mp3_buffer = io.BytesIO()
         audio_segment.export(
             mp3_buffer, 

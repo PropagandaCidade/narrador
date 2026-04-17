@@ -1,6 +1,6 @@
-# studio_worker.py - VERSÃO 30.4 - ENGINE STUDIO PRO (HIVE)
+# studio_worker.py - VERSÃO 30.5 - ENGINE STUDIO PRO (HIVE)
 # LOCAL: studio-engine.up.railway.app
-# DESCRIÇÃO: Blindagem total de modelos (v28.0 paridade) com motor de efeitos Studio.
+# DESCRIÇÃO: Mudança para generate_content (Unary) para resolver "Stream Empty" no 3.1.
 
 import os
 import io
@@ -89,7 +89,7 @@ def apply_advanced_studio_fx(audio_segment, fx):
 
 @app.route('/')
 def home():
-    return "Studio Engine v30.4 (Model Shield) is online."
+    return "Studio Engine v30.5 (Unary TTS) is online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_studio():
@@ -102,8 +102,8 @@ def generate_audio_studio():
         model_nickname = str(data.get('model_to_use', 'flash')).lower()
         origin = data.get('origin_interface', 'studio_hub')
         
-        # --- BLINDAGEM DE MODELOS (v30.4) ---
-        if "3.1" in model_nickname and "flash" in model_nickname:
+        # --- BLINDAGEM DE MODELOS (v30.5) ---
+        if "3.1" in model_nickname:
             model_fullname = "gemini-3.1-flash-tts-preview"
         elif "2.5" in model_nickname and "pro" in model_nickname:
             model_fullname = "gemini-2.5-pro-preview-tts"
@@ -114,7 +114,7 @@ def generate_audio_studio():
         else:
             model_fullname = "gemini-2.5-flash-preview-tts"
 
-        logger.info(f"Studio Engine: {origin} utilizando modelo real -> {model_fullname}")
+        logger.info(f"Studio Engine: {origin} requisitando {model_fullname} (Unary Mode)")
 
         # Montagem do prompt
         if prompt:
@@ -124,33 +124,54 @@ def generate_audio_studio():
 
         client = genai.Client(api_key=api_key)
 
-        # Geração via Stream
-        audio_chunks = []
-        for chunk in client.models.generate_content_stream(
-            model=model_fullname,
-            contents=final_prompt,
-            config=types.GenerateContentConfig(
-                temperature=float(data.get('temperature', 0.85)),
-                response_modalities=["audio"],
-                speech_config=types.SpeechConfig(
-                    voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=data.get('voice')))
+        generate_config = types.GenerateContentConfig(
+            temperature=float(data.get('temperature', 0.85)),
+            response_modalities=["AUDIO"], # Paridade total com documentação
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=data.get('voice'))
                 )
             )
-        ):
-            if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
-                audio_chunks.append(chunk.candidates[0].content.parts[0].inline_data.data)
+        )
 
-        if not audio_chunks:
-            return jsonify({"error": "Google API não retornou dados no Studio Engine."}), 500
+        # GERAÇÃO UNARY (generate_content) - Paridade com código do AI Studio
+        response_audio_raw = None
+        max_retries = 2
+        
+        for attempt in range(max_retries):
+            try:
+                response = client.models.generate_content(
+                    model=model_fullname, 
+                    contents=final_prompt, 
+                    config=generate_config
+                )
+                
+                if (response.candidates and response.candidates[0].content and 
+                    response.candidates[0].content.parts and 
+                    response.candidates[0].content.parts[0].inline_data):
+                    response_audio_raw = response.candidates[0].content.parts[0].inline_data.data
+                    break
+                    
+            except Exception as e:
+                logger.warning(f"Studio Engine: Tentativa {attempt+1} falhou para {model_fullname}: {str(e)}")
+                if attempt == max_retries - 1: raise e
+                time.sleep(1)
+
+        if not response_audio_raw:
+            return jsonify({"error": "Google API não retornou dados de áudio no Engine."}), 500
 
         # --- PROCESSAMENTO AUDIO ---
-        raw_audio = b''.join(audio_chunks)
-        seg = AudioSegment.from_raw(io.BytesIO(raw_audio), sample_width=2, frame_rate=24000, channels=1)
+        seg = AudioSegment.from_raw(
+            io.BytesIO(response_audio_raw), 
+            sample_width=2, 
+            frame_rate=24000, 
+            channels=1
+        )
 
         # Normalização inicial
         seg = effects.normalize(seg, headroom=2.0)
         
-        # Aplicação de Efeitos (Pula se não houver efeitos no JSON)
+        # Aplicação de Efeitos Profissionais
         seg = apply_advanced_studio_fx(seg, data.get('studio_fx', {}))
 
         # Exportação MP3 Hi-Fi
@@ -158,7 +179,7 @@ def generate_audio_studio():
         seg.export(out, format="mp3", bitrate="128k", parameters=["-ar", "44100"])
         
         res = make_response(send_file(io.BytesIO(out.getvalue()), mimetype='audio/mpeg'))
-        res.headers['X-Studio-Engine'] = "Active-v30.4"
+        res.headers['X-Studio-Engine'] = "Active-v30.5"
         res.headers['X-Model-Used'] = model_fullname
         return res
 
