@@ -1,6 +1,6 @@
-# studio_worker.py - VERSÃO 30.7 - ENGINE STUDIO PRO (HIVE)
+# studio_worker.py - VERSÃO 30.8 - ENGINE STUDIO PRO (HIVE)
 # LOCAL: studio-engine.up.railway.app
-# DESCRIÇÃO: Implementação Direct REST para paridade total com teste de sucesso PHP.
+# DESCRIÇÃO: Implementação REST definitiva com Safety Override e paridade total 3.1.
 
 import os
 import io
@@ -24,7 +24,7 @@ CORS(app, expose_headers=['X-Model-Used', 'X-Studio-Engine'])
 
 def apply_advanced_studio_fx(audio_segment, fx):
     """
-    Motor de Efeitos: Só ativa se houver configuração no JSON.
+    Motor de Efeitos Profissionais: Só processa se houver parâmetros ativos.
     """
     try:
         if not fx: return audio_segment
@@ -86,7 +86,7 @@ def apply_advanced_studio_fx(audio_segment, fx):
 
 @app.route('/')
 def home():
-    return "Studio Engine v30.7 (Direct REST Mode) is online."
+    return "Studio Engine v30.8 (Safety Override Mode) is online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_studio():
@@ -97,7 +97,7 @@ def generate_audio_studio():
         text = data.get('text', '')
         prompt = data.get('custom_prompt', '')
         model_nickname = str(data.get('model_to_use', 'flash')).lower()
-        voice_name = data.get('voice')
+        voice_name = str(data.get('voice', 'Kore')).capitalize() # Garante CamelCase
         origin = data.get('origin_interface', 'studio_hub')
         
         try:
@@ -105,7 +105,7 @@ def generate_audio_studio():
         except:
             temperature = 0.85
 
-        # --- BLINDAGEM DE MODELOS (v30.7) ---
+        # --- MODEL SHIELD (v30.8) ---
         if "3.1" in model_nickname:
             model_fullname = "gemini-3.1-flash-tts-preview"
         elif "2.5" in model_nickname and "pro" in model_nickname:
@@ -117,12 +117,12 @@ def generate_audio_studio():
         else:
             model_fullname = "gemini-2.5-flash-preview-tts"
 
-        logger.info(f"Studio Engine: {origin} -> Direct REST: {model_fullname}")
+        logger.info(f"Studio Engine: {origin} -> REST Request: {model_fullname} | Voice: {voice_name}")
 
         # Montagem do prompt
         final_prompt = f"[CONTEXTO/ESTILO DE NARRAÇÃO: {prompt}] {text}" if prompt else text
 
-        # --- CHAMADA REST DIRETA (PARIDADE TESTE PHP) ---
+        # --- CHAMADA REST DIRETA COM SAFETY OVERRIDE ---
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_fullname}:generateContent?key={api_key}"
         
         payload = {
@@ -130,11 +130,15 @@ def generate_audio_studio():
             "generationConfig": {
                 "responseModalities": ["AUDIO"],
                 "speechConfig": {
-                    "voiceConfig": {
-                        "voiceName": voice_name if voice_name else "Kore"
-                    }
+                    "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice_name}}
                 }
-            }
+            },
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+            ]
         }
 
         response_audio_bytes = None
@@ -144,17 +148,31 @@ def generate_audio_studio():
             for attempt in range(max_retries):
                 try:
                     res = client.post(url, json=payload)
+                    res_json = res.json()
                     
                     if res.status_code == 200:
-                        res_json = res.json()
-                        b64_data = res_json['candidates'][0]['content']['parts'][0]['inlineData']['data']
-                        response_audio_bytes = base64.b64decode(b64_data)
-                        break
+                        if 'candidates' in res_json and len(res_json['candidates']) > 0:
+                            candidate = res_json['candidates'][0]
+                            
+                            # Verifica bloqueio por segurança (mesmo com BLOCK_NONE pode ocorrer)
+                            if candidate.get('finishReason') in ['SAFETY', 'OTHER']:
+                                return jsonify({"error": f"O Google bloqueou este conteúdo (Safety Filter). Tente mudar o texto."}), 400
+                                
+                            parts = candidate.get('content', {}).get('parts', [])
+                            if parts and 'inlineData' in parts[0]:
+                                b64_data = parts[0]['inlineData']['data']
+                                response_audio_bytes = base64.b64decode(b64_data)
+                                break
+                        
+                        # Bloqueio de Prompt
+                        if 'promptFeedback' in res_json and res_json['promptFeedback'].get('blockReason'):
+                            return jsonify({"error": "Texto não permitido pelas políticas da Google."}), 400
+                            
+                        return jsonify({"error": "Resposta inesperada da Google API."}), 500
                     else:
-                        error_msg = res.json().get('error', {}).get('message', 'Erro na API Google')
-                        logger.warning(f"Studio Engine: Tentativa {attempt+1} falhou: {error_msg}")
+                        err_msg = res_json.get('error', {}).get('message', 'Erro na API Google')
                         if attempt == max_retries - 1:
-                            return jsonify({"error": error_msg}), res.status_code
+                            return jsonify({"error": err_msg}), res.status_code
                 
                 except Exception as e:
                     logger.error(f"Erro na conexão REST Studio: {str(e)}")
@@ -163,9 +181,9 @@ def generate_audio_studio():
                 time.sleep(1)
 
         if not response_audio_bytes:
-            return jsonify({"error": "Google API não devolveu dados binários no Engine."}), 500
+            return jsonify({"error": "O cluster não conseguiu extrair áudio da resposta."}), 500
 
-        # --- PROCESSAMENTO AUDIO ---
+        # --- MOTOR DE PROCESSAMENTO STUDIO HUB ---
         seg = AudioSegment.from_raw(
             io.BytesIO(response_audio_bytes), 
             sample_width=2, 
@@ -176,21 +194,21 @@ def generate_audio_studio():
         # Normalização inicial
         seg = effects.normalize(seg, headroom=2.0)
         
-        # Aplicação de Efeitos
+        # Aplicação de Efeitos Profissionais
         seg = apply_advanced_studio_fx(seg, data.get('studio_fx', {}))
 
-        # Exportação MP3 Hi-Fi
+        # Exportação Hi-Fi
         out = io.BytesIO()
         seg.export(out, format="mp3", bitrate="128k", parameters=["-ar", "44100"])
         
         res = make_response(send_file(io.BytesIO(out.getvalue()), mimetype='audio/mpeg'))
-        res.headers['X-Studio-Engine'] = "Active-v30.7"
+        res.headers['X-Studio-Engine'] = "Active-v30.8"
         res.headers['X-Model-Used'] = model_fullname
         return res
 
     except Exception as e:
-        logger.error(f"Erro Crítico Studio Engine: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Erro Crítico Engine: {str(e)}")
+        return jsonify({"error": f"Erro interno: {str(e)}"}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))

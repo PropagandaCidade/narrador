@@ -1,6 +1,6 @@
-# app.py - VERSÃO 28.5 - WORKER ENGINE (HIVE STABLE) - FULL DEBUG REST
+# app.py - VERSÃO 28.6 - WORKER ENGINE (HIVE STABLE) - SAFETY OVERRIDE
 # LOCAL: Repositório Único (N1, N2, N3, N4, N5)
-# DESCRIÇÃO: Retorna o JSON bruto da Google em caso de erro estrutural para depuração.
+# DESCRIÇÃO: Implementação de Safety Settings para evitar o erro PROHIBITED_CONTENT no modelo 3.1.
 
 import os
 import io
@@ -31,7 +31,7 @@ def clean_skill_tags(text):
 @app.route('/')
 def home():
     srv = os.environ.get('RAILWAY_SERVICE_NAME', 'Worker')
-    return f"Serviço v28.5 ({srv}) - Hive Debug REST Online."
+    return f"Serviço v28.6 ({srv}) - Safety Override Enabled."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -46,7 +46,7 @@ def generate_audio_endpoint():
 
         text_raw = data.get('text', '')
         text_to_narrate = clean_skill_tags(text_raw)
-        voice_name = str(data.get('voice', 'Kore')).capitalize() # Garante Capitalize (ex: Kore, Puck)
+        voice_name = str(data.get('voice', 'Kore')).capitalize()
         model_nickname = str(data.get('model_to_use', 'flash')).lower()
         custom_prompt = data.get('custom_prompt', '').strip()
         origin = data.get('origin_interface', 'dashboard')
@@ -62,7 +62,7 @@ def generate_audio_endpoint():
         # Montagem do prompt
         final_text_for_api = f"[CONTEXTO/ESTILO DE NARRAÇÃO: {custom_prompt}] {text_to_narrate}" if custom_prompt else text_to_narrate
 
-        # --- MODEL SHIELD (v28.5) ---
+        # --- MODEL SHIELD ---
         if "3.1" in model_nickname:
             model_fullname = "gemini-3.1-flash-tts-preview"
         elif "2.5" in model_nickname and "pro" in model_nickname:
@@ -74,23 +74,26 @@ def generate_audio_endpoint():
         else:
             model_fullname = "gemini-2.5-flash-preview-tts"
 
-        logger.info(f"HIVE Worker: {origin} -> {model_fullname} (REST Mode)")
+        logger.info(f"HIVE Worker: {origin} -> {model_fullname} (REST + Safety Override)")
 
-        # --- CHAMADA REST DIRETA ---
+        # --- CHAMADA REST DIRETA COM SAFETY SETTINGS (v28.6) ---
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_fullname}:generateContent?key={api_key}"
         
         payload = {
-            "contents": [
-                {"parts": [{"text": final_text_for_api}]}
-            ],
+            "contents": [{"parts": [{"text": final_text_for_api}]}],
             "generationConfig": {
                 "responseModalities": ["AUDIO"],
                 "speechConfig": {
-                    "voiceConfig": {
-                        "prebuiltVoiceConfig": {"voiceName": voice_name}
-                    }
+                    "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice_name}}
                 }
-            }
+            },
+            # REDUZ A SENSIBILIDADE DOS FILTROS DE SEGURANÇA
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+            ]
         }
 
         response_audio_bytes = None
@@ -103,29 +106,29 @@ def generate_audio_endpoint():
                     res_json = res.json()
                     
                     if res.status_code == 200:
-                        # VERIFICAÇÃO DE CANDIDATOS
                         if 'candidates' in res_json and len(res_json['candidates']) > 0:
                             candidate = res_json['candidates'][0]
                             
-                            # Verifica se houve bloqueio por segurança
-                            if candidate.get('finishReason') == 'SAFETY':
-                                return jsonify({"error": "Google bloqueou este texto por motivos de segurança (Safety Filter)."}), 400
+                            # Se ainda assim houver bloqueio, capturamos o motivo exato
+                            if candidate.get('finishReason') in ['SAFETY', 'OTHER']:
+                                block_reason = candidate.get('finishReason')
+                                return jsonify({"error": f"O Google bloqueou este conteúdo (Motivo: {block_reason}). Tente mudar algumas palavras do roteiro."}), 400
                                 
                             parts = candidate.get('content', {}).get('parts', [])
                             if parts and 'inlineData' in parts[0]:
                                 b64_data = parts[0]['inlineData']['data']
                                 response_audio_bytes = base64.b64decode(b64_data)
                                 break
-                            else:
-                                # Caso não haja dados de áudio na parte
-                                return jsonify({"error": f"Estrutura de áudio ausente. Resposta: {json.dumps(res_json)}"}), 400
-                        else:
-                            # SE NÃO HOUVER CANDIDATES, RETORNA O JSON COMPLETO PARA DEBUG
-                            return jsonify({"error": f"Resposta sem candidatos. JSON: {json.dumps(res_json)}"}), 400
+                        
+                        # Se não houver candidatos mas houver feedback de bloqueio no prompt
+                        if 'promptFeedback' in res_json and res_json['promptFeedback'].get('blockReason'):
+                            reason = res_json['promptFeedback']['blockReason']
+                            return jsonify({"error": f"Conteúdo Proibido pela Google (Block: {reason})."}), 400
+                            
+                        return jsonify({"error": "A API retornou uma resposta vazia ou inesperada."}), 500
+                    
                     else:
-                        # Erros de Status (400, 401, 403, 404, 500)
-                        error_info = res_json.get('error', {})
-                        error_msg = error_info.get('message', 'Erro desconhecido na API.')
+                        error_msg = res_json.get('error', {}).get('message', 'Erro na API Google.')
                         if attempt == max_retries - 1:
                             return jsonify({"error": f"Google API ({res.status_code}): {error_msg}"}), res.status_code
                 
@@ -136,7 +139,7 @@ def generate_audio_endpoint():
                 time.sleep(1)
 
         if not response_audio_bytes:
-            return jsonify({"error": "Falha crítica na extração de áudio binário."}), 500
+            return jsonify({"error": "Falha ao processar o áudio retornado pelo cluster."}), 500
 
         # --- MOTOR DE PROCESSAMENTO HI-FI ---
         audio_segment = AudioSegment.from_raw(
@@ -160,7 +163,7 @@ def generate_audio_endpoint():
         return http_response
 
     except Exception as e:
-        logger.error(f"Erro Crítico no Worker: {str(e)}")
+        logger.error(f"Erro no Worker: {str(e)}")
         return jsonify({"error": f"Erro interno: {str(e)}"}), 500
 
 if __name__ == '__main__':
