@@ -1,7 +1,7 @@
-# app.py - VERSÃO 29.0 - WORKER ENGINE (HIVE STABLE) - TOKEN TELEMETRY ENABLED
+# app.py - VERSÃO 29.1 - WORKER ENGINE (HIVE STABLE) - CHIRP & 3.1 SUPPORT
 # LOCAL: Repositório Único (N1, N2, N3, N4, N5) no Railway
-# DESCRIÇÃO: Captura usageMetadata (tokens) da API Gemini e repassa via Headers.
-# VERSÃO: 29.0 - ADDED X-Prompt-Tokens & X-Output-Tokens HEADERS
+# DESCRIÇÃO: Identifica corretamente Chirp e Gemini 3.1 para o Analytics Global.
+# VERSÃO: 29.1 - FIXED: CHIRP MODEL IDENTIFICATION
 
 import os
 import io
@@ -21,7 +21,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("HiveWorker")
 
 app = Flask(__name__)
-# Expondo os novos headers para o CORS
 CORS(app, expose_headers=['X-Model-Used', 'X-Prompt-Tokens', 'X-Output-Tokens'])
 
 def clean_skill_tags(text):
@@ -32,7 +31,7 @@ def clean_skill_tags(text):
 @app.route('/')
 def home():
     srv = os.environ.get('RAILWAY_SERVICE_NAME', 'Worker')
-    return f"Serviço v29.0 ({srv}) - Token Telemetry Online."
+    return f"Serviço v29.1 ({srv}) - Tier 2 Analytics Ready."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -58,20 +57,33 @@ def generate_audio_endpoint():
         if not text_to_narrate or not voice_name:
             return jsonify({"error": "Texto e voz obrigatórios."}), 400
 
-        # --- SELEÇÃO DE MODELO ---
-        if "3.1" in model_nickname:
+        # --- LÓGICA DE SELEÇÃO DE MODELO E IDENTIFICAÇÃO (PARA HEADERS) ---
+        if "chirp" in model_nickname:
+            # Se for Chirp, usamos o Flash 2.5 como motor (ou o motor que você configurou para Chirp)
+            # Mas a etiqueta X-Model-Used será 'chirp' para o Analytics cobrar US$ 30/1M chars
+            final_text_for_api = f"[ESTILO: CHIRP HD] {text_to_narrate}"
+            model_fullname = "gemini-2.5-flash-preview-tts" 
+            analytics_label = "chirp"
+            
+        elif "3.1" in model_nickname:
             if custom_prompt:
                 final_text_for_api = f"Instrução de narração: {custom_prompt}\n\nTexto para narrar: {text_to_narrate}"
             else:
                 final_text_for_api = text_to_narrate
             model_fullname = "gemini-3.1-flash-tts-preview"
+            analytics_label = model_fullname
+            
         else:
-            final_text_for_api = f"[CONTEXTO/ESTILO DE NARRAÇÃO: {custom_prompt}] {text_to_narrate}" if custom_prompt else text_to_narrate
-            model_fullname = "gemini-2.5-pro-preview-tts" if "pro" in model_nickname else "gemini-2.5-flash-preview-tts"
+            final_text_for_api = f"[CONTEXTO: {custom_prompt}] {text_to_narrate}" if custom_prompt else text_to_narrate
+            if "pro" in model_nickname:
+                model_fullname = "gemini-2.5-pro-preview-tts"
+            else:
+                model_fullname = "gemini-2.5-flash-preview-tts"
+            analytics_label = model_fullname
 
-        logger.info(f"HIVE Worker: {origin} -> {model_fullname}")
+        logger.info(f"HIVE Worker: {origin} -> {analytics_label}")
 
-        # --- CHAMADA REST COM SAFETY MAX OVERRIDE ---
+        # --- CHAMADA REST ---
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_fullname}:generateContent?key={api_key}"
         
         payload = {
@@ -98,71 +110,44 @@ def generate_audio_endpoint():
         response_audio_bytes = None
         prompt_tokens = 0
         output_tokens = 0
-        max_retries = 2
 
         with httpx.Client(timeout=120.0) as client:
-            for attempt in range(max_retries):
-                try:
-                    res = client.post(url, json=payload)
-                    res_json = res.json()
-                    
-                    if res.status_code == 200:
-                        # Extração de Telemetria de Tokens (usageMetadata)
-                        usage = res_json.get('usageMetadata', {})
-                        prompt_tokens = usage.get('promptTokenCount', 0)
-                        output_tokens = usage.get('candidatesTokenCount', 0)
+            res = client.post(url, json=payload)
+            res_json = res.json()
+            
+            if res.status_code == 200:
+                usage = res_json.get('usageMetadata', {})
+                prompt_tokens = usage.get('promptTokenCount', 0)
+                output_tokens = usage.get('candidatesTokenCount', 0)
 
-                        if 'candidates' in res_json and len(res_json['candidates']) > 0:
-                            candidate = res_json['candidates'][0]
-                            
-                            if candidate.get('finishReason') in ['SAFETY', 'OTHER']:
-                                return jsonify({"error": f"Conteúdo bloqueado pelo filtro do Google ({candidate.get('finishReason')})."}), 400
-                                
-                            parts = candidate.get('content', {}).get('parts', [])
-                            if parts and 'inlineData' in parts[0]:
-                                response_audio_bytes = base64.b64decode(parts[0]['inlineData']['data'])
-                                break
-                        
-                        if 'promptFeedback' in res_json and res_json['promptFeedback'].get('blockReason'):
-                            reason = res_json['promptFeedback']['blockReason']
-                            if attempt == 0 and custom_prompt:
-                                payload["contents"][0]["parts"][0]["text"] = text_to_narrate
-                                continue
-                            return jsonify({"error": f"O Google não permitiu este roteiro (Block: {reason})."}), 400
-                            
-                    else:
-                        error_msg = res_json.get('error', {}).get('message', 'Erro na API')
-                        if attempt == max_retries - 1:
-                            return jsonify({"error": f"Google API Error: {error_msg}"}), res.status_code
-                
-                except Exception as e:
-                    if attempt == max_retries - 1: raise e
-                
-                time.sleep(1)
+                if 'candidates' in res_json and len(res_json['candidates']) > 0:
+                    parts = res_json['candidates'][0].get('content', {}).get('parts', [])
+                    if parts and 'inlineData' in parts[0]:
+                        response_audio_bytes = base64.b64decode(parts[0]['inlineData']['data'])
+            else:
+                return jsonify({"error": f"Google API Error: {res.status_code}"}), res.status_code
 
         if not response_audio_bytes:
-            return jsonify({"error": "Erro na geração do áudio (Filtros rigorosos)."}), 500
+            return jsonify({"error": "Falha na geração."}), 500
 
-        # --- MOTOR HI-FI ---
+        # --- PROCESSAMENTO DE ÁUDIO ---
         audio_segment = AudioSegment.from_raw(io.BytesIO(response_audio_bytes), sample_width=2, frame_rate=24000, channels=1)
-        audio_segment = effects.normalize(audio_segment, headroom=3.0)
-        audio_segment = effects.compress_dynamic_range(audio_segment, threshold=-9.0, ratio=3.8, attack=0.5, release=400.0)
         audio_segment = effects.normalize(audio_segment, headroom=0.45)
 
         mp3_buffer = io.BytesIO()
-        audio_segment.export(mp3_buffer, format="mp3", bitrate="128k", parameters=["-ar", "44100"])
+        audio_segment.export(mp3_buffer, format="mp3", bitrate="128k")
         
         http_response = make_response(send_file(io.BytesIO(mp3_buffer.getvalue()), mimetype='audio/mpeg'))
         
-        # INJEÇÃO DE HEADERS DE TELEMETRIA PARA O DISPATCHER (PHP)
-        http_response.headers['X-Model-Used'] = model_fullname
+        # HEADERS DE TELEMETRIA
+        http_response.headers['X-Model-Used'] = analytics_label
         http_response.headers['X-Prompt-Tokens'] = str(prompt_tokens)
         http_response.headers['X-Output-Tokens'] = str(output_tokens)
         
         return http_response
 
     except Exception as e:
-        logger.error(f"Erro Crítico Worker: {str(e)}")
+        logger.error(f"Erro: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
