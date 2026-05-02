@@ -1,7 +1,7 @@
-# app.py - VERSÃO 28.8 - WORKER ENGINE (HIVE STABLE) - AGGRESSIVE SAFETY BYPASS
-# LOCAL: Repositório Único (N1, N2, N3, N4, N5)
-# DESCRIÇÃO: Ajuste de Schema (voice_name) para compatibilidade universal.
-# FIX: 'voiceName' to 'voice_name' in prebuiltVoiceConfig.
+# app.py - VERSÃO 29.0 - WORKER ENGINE (HIVE STABLE) - TOKEN TELEMETRY ENABLED
+# LOCAL: Repositório Único (N1, N2, N3, N4, N5) no Railway
+# DESCRIÇÃO: Captura usageMetadata (tokens) da API Gemini e repassa via Headers.
+# VERSÃO: 29.0 - ADDED X-Prompt-Tokens & X-Output-Tokens HEADERS
 
 import os
 import io
@@ -21,7 +21,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("HiveWorker")
 
 app = Flask(__name__)
-CORS(app, expose_headers=['X-Model-Used'])
+# Expondo os novos headers para o CORS
+CORS(app, expose_headers=['X-Model-Used', 'X-Prompt-Tokens', 'X-Output-Tokens'])
 
 def clean_skill_tags(text):
     if not text: return ""
@@ -31,7 +32,7 @@ def clean_skill_tags(text):
 @app.route('/')
 def home():
     srv = os.environ.get('RAILWAY_SERVICE_NAME', 'Worker')
-    return f"Serviço v28.8 ({srv}) - Fixed Schema v1 Online."
+    return f"Serviço v29.0 ({srv}) - Token Telemetry Online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -57,7 +58,7 @@ def generate_audio_endpoint():
         if not text_to_narrate or not voice_name:
             return jsonify({"error": "Texto e voz obrigatórios."}), 400
 
-        # --- AJUSTE DE PROMPT PARA MODELO 3.1 ---
+        # --- SELEÇÃO DE MODELO ---
         if "3.1" in model_nickname:
             if custom_prompt:
                 final_text_for_api = f"Instrução de narração: {custom_prompt}\n\nTexto para narrar: {text_to_narrate}"
@@ -68,7 +69,7 @@ def generate_audio_endpoint():
             final_text_for_api = f"[CONTEXTO/ESTILO DE NARRAÇÃO: {custom_prompt}] {text_to_narrate}" if custom_prompt else text_to_narrate
             model_fullname = "gemini-2.5-pro-preview-tts" if "pro" in model_nickname else "gemini-2.5-flash-preview-tts"
 
-        logger.info(f"HIVE Worker: {origin} -> {model_fullname} (REST Fix)")
+        logger.info(f"HIVE Worker: {origin} -> {model_fullname}")
 
         # --- CHAMADA REST COM SAFETY MAX OVERRIDE ---
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_fullname}:generateContent?key={api_key}"
@@ -80,7 +81,7 @@ def generate_audio_endpoint():
                 "speechConfig": {
                     "voiceConfig": {
                         "prebuiltVoiceConfig": {
-                            "voice_name": voice_name # FIX: de voiceName para voice_name
+                            "voice_name": voice_name
                         }
                     }
                 }
@@ -95,6 +96,8 @@ def generate_audio_endpoint():
         }
 
         response_audio_bytes = None
+        prompt_tokens = 0
+        output_tokens = 0
         max_retries = 2
 
         with httpx.Client(timeout=120.0) as client:
@@ -104,6 +107,11 @@ def generate_audio_endpoint():
                     res_json = res.json()
                     
                     if res.status_code == 200:
+                        # Extração de Telemetria de Tokens (usageMetadata)
+                        usage = res_json.get('usageMetadata', {})
+                        prompt_tokens = usage.get('promptTokenCount', 0)
+                        output_tokens = usage.get('candidatesTokenCount', 0)
+
                         if 'candidates' in res_json and len(res_json['candidates']) > 0:
                             candidate = res_json['candidates'][0]
                             
@@ -145,7 +153,12 @@ def generate_audio_endpoint():
         audio_segment.export(mp3_buffer, format="mp3", bitrate="128k", parameters=["-ar", "44100"])
         
         http_response = make_response(send_file(io.BytesIO(mp3_buffer.getvalue()), mimetype='audio/mpeg'))
+        
+        # INJEÇÃO DE HEADERS DE TELEMETRIA PARA O DISPATCHER (PHP)
         http_response.headers['X-Model-Used'] = model_fullname
+        http_response.headers['X-Prompt-Tokens'] = str(prompt_tokens)
+        http_response.headers['X-Output-Tokens'] = str(output_tokens)
+        
         return http_response
 
     except Exception as e:
