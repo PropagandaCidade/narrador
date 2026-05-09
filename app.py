@@ -1,7 +1,7 @@
-# app.py - VERSÃO 29.2 - WORKER ENGINE (HIVE STABLE) - CHIRP & 3.1 SUPPORT
+# app.py - VERSÃO 29.3 - WORKER ENGINE (HIVE STABLE) - CHIRP & 3.1 SUPPORT
 # LOCAL: Repositório Único (N1, N2, N3, N4, N5) no Railway
 # DESCRIÇÃO: Identifica corretamente Chirp e Gemini 3.1 para o Analytics Global.
-# VERSÃO: 29.2 - FIXED: MP3 export em 44.100 Hz, 192 kbps, sem alterar pitch/velocidade da voz
+# VERSÃO: 29.3 - FIXED: MP3 mono, 44.100 Hz, 192 kbps, base 16-bit, sem alterar pitch/velocidade da voz
 
 import os
 import io
@@ -24,23 +24,26 @@ app = Flask(__name__)
 CORS(app, expose_headers=['X-Model-Used', 'X-Prompt-Tokens', 'X-Output-Tokens'])
 
 def clean_skill_tags(text):
-    if not text: return ""
+    if not text:
+        return ""
     cleaned = re.sub(r'</?context_guard>', '', text)
     return cleaned.strip()
 
 @app.route('/')
 def home():
     srv = os.environ.get('RAILWAY_SERVICE_NAME', 'Worker')
-    return f"Serviço v29.2 ({srv}) - Tier 2 Analytics Ready."
+    return f"Serviço v29.3 ({srv}) - Tier 2 Analytics Ready."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
     try:
         data = request.get_json()
-        if not data: return jsonify({"error": "Dados inválidos."}), 400
+        if not data:
+            return jsonify({"error": "Dados inválidos."}), 400
 
         api_key = data.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
-        if not api_key: return jsonify({"error": "Chave Gemini ausente."}), 500
+        if not api_key:
+            return jsonify({"error": "Chave Gemini ausente."}), 500
 
         text_raw = data.get('text', '')
         text_to_narrate = clean_skill_tags(text_raw)
@@ -67,7 +70,9 @@ def generate_audio_endpoint():
             
         elif "3.1" in model_nickname:
             if custom_prompt:
-                final_text_for_api = f"Instrução de narração: {custom_prompt}\n\nTexto para narrar: {text_to_narrate}"
+                final_text_for_api = f"Instrução de narração: {custom_prompt}
+
+Texto para narrar: {text_to_narrate}"
             else:
                 final_text_for_api = text_to_narrate
             model_fullname = "gemini-3.1-flash-tts-preview"
@@ -131,31 +136,33 @@ def generate_audio_endpoint():
             return jsonify({"error": "Falha na geração."}), 500
 
         # --- PROCESSAMENTO DE ÁUDIO ---
-        # IMPORTANTE:
-        # O áudio bruto da API precisa ser lido primeiro na taxa original correta.
-        # Não coloque frame_rate=44100 diretamente no from_raw, porque isso acelera o áudio
-        # e deixa a voz fina, estilo "voz de esquilo".
+        # O áudio bruto da API deve ser lido na taxa original correta.
+        # Usar 44.100 Hz diretamente no from_raw acelera a voz e causa efeito "voz de esquilo".
         audio_segment = AudioSegment.from_raw(
             io.BytesIO(response_audio_bytes),
-            sample_width=2,
-            frame_rate=24000,
-            channels=1
+            sample_width=2,   # 16-bit PCM na leitura do áudio bruto
+            frame_rate=24000, # taxa original do áudio bruto retornado pela API
+            channels=1        # mono desde a origem
         )
 
+        # Garante base interna mono, 16-bit e depois converte a amostragem para 44.100 Hz sem alterar pitch.
+        audio_segment = audio_segment.set_channels(1)
+        audio_segment = audio_segment.set_sample_width(2)
         audio_segment = effects.normalize(audio_segment, headroom=0.45)
-
-        # Agora sim converte para 44.100 Hz sem alterar o pitch/velocidade.
-        audio_segment = audio_segment.set_frame_rate(44100).set_channels(1)
+        audio_segment = audio_segment.set_frame_rate(44100)
+        audio_segment = audio_segment.set_channels(1)
+        audio_segment = audio_segment.set_sample_width(2)
 
         mp3_buffer = io.BytesIO()
         audio_segment.export(
             mp3_buffer,
             format="mp3",
+            codec="libmp3lame",
             bitrate="192k",
             parameters=[
-                "-ar", "44100",
-                "-ac", "1",
-                "-b:a", "192k"
+                "-ac", "1",       # força mono na saída final
+                "-ar", "44100",   # força 44.100 Hz na saída final
+                "-b:a", "192k"    # força 192 kbps na saída final
             ]
         )
         mp3_buffer.seek(0)
