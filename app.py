@@ -1,7 +1,7 @@
-# app.py - VERSÃO 31.0 - WORKER ENGINE (HI-FI AUDIO FIX)
+# app.py - VERSÃO 29.1 - WORKER ENGINE (HIVE STABLE) - CHIRP & 3.1 SUPPORT
 # LOCAL: Repositório Único (N1, N2, N3, N4, N5) no Railway
-# DESCRIÇÃO: Corrigido efeito "tico e teco" usando from_file e resampling adequado.
-# ESPECIFICAÇÕES: Mono, 44.100Hz, 192k, Processamento em 24-bit.
+# DESCRIÇÃO: Identifica corretamente Chirp e Gemini 3.1 para o Analytics Global.
+# VERSÃO: 29.1 - FIXED: CHIRP MODEL IDENTIFICATION
 
 import os
 import io
@@ -21,8 +21,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("HiveWorker")
 
 app = Flask(__name__)
-# Expondo os headers necessários
-CORS(app, expose_headers=['X-Model-Used', 'X-Prompt-Tokens', 'X-Output-Tokens', 'X-Audio-Metadata'])
+CORS(app, expose_headers=['X-Model-Used', 'X-Prompt-Tokens', 'X-Output-Tokens'])
 
 def clean_skill_tags(text):
     if not text: return ""
@@ -32,7 +31,7 @@ def clean_skill_tags(text):
 @app.route('/')
 def home():
     srv = os.environ.get('RAILWAY_SERVICE_NAME', 'Worker')
-    return f"Serviço v31.0 ({srv}) - Hi-Fi Audio Engine Online."
+    return f"Serviço v29.1 ({srv}) - Tier 2 Analytics Ready."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -58,15 +57,31 @@ def generate_audio_endpoint():
         if not text_to_narrate or not voice_name:
             return jsonify({"error": "Texto e voz obrigatórios."}), 400
 
-        # --- SELEÇÃO DE MODELO ---
-        if "3.1" in model_nickname:
-            final_text_for_api = f"Instrução: {custom_prompt}\n\nTexto: {text_to_narrate}" if custom_prompt else text_to_narrate
+        # --- LÓGICA DE SELEÇÃO DE MODELO E IDENTIFICAÇÃO (PARA HEADERS) ---
+        if "chirp" in model_nickname:
+            # Se for Chirp, usamos o Flash 2.5 como motor (ou o motor que você configurou para Chirp)
+            # Mas a etiqueta X-Model-Used será 'chirp' para o Analytics cobrar US$ 30/1M chars
+            final_text_for_api = f"[ESTILO: CHIRP HD] {text_to_narrate}"
+            model_fullname = "gemini-2.5-flash-preview-tts" 
+            analytics_label = "chirp"
+            
+        elif "3.1" in model_nickname:
+            if custom_prompt:
+                final_text_for_api = f"Instrução de narração: {custom_prompt}\n\nTexto para narrar: {text_to_narrate}"
+            else:
+                final_text_for_api = text_to_narrate
             model_fullname = "gemini-3.1-flash-tts-preview"
+            analytics_label = model_fullname
+            
         else:
             final_text_for_api = f"[CONTEXTO: {custom_prompt}] {text_to_narrate}" if custom_prompt else text_to_narrate
-            model_fullname = "gemini-2.5-pro-preview-tts" if "pro" in model_nickname else "gemini-2.5-flash-preview-tts"
+            if "pro" in model_nickname:
+                model_fullname = "gemini-2.5-pro-preview-tts"
+            else:
+                model_fullname = "gemini-2.5-flash-preview-tts"
+            analytics_label = model_fullname
 
-        logger.info(f"HIVE Hi-Fi Engine: {origin} -> {model_fullname}")
+        logger.info(f"HIVE Worker: {origin} -> {analytics_label}")
 
         # --- CHAMADA REST ---
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_fullname}:generateContent?key={api_key}"
@@ -82,13 +97,19 @@ def generate_audio_endpoint():
                         }
                     }
                 }
-            }
+            },
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"}
+            ]
         }
 
         response_audio_bytes = None
         prompt_tokens = 0
         output_tokens = 0
-        audio_metadata = "" 
 
         with httpx.Client(timeout=120.0) as client:
             res = client.post(url, json=payload)
@@ -100,47 +121,28 @@ def generate_audio_endpoint():
                 output_tokens = usage.get('candidatesTokenCount', 0)
 
                 if 'candidates' in res_json and len(res_json['candidates']) > 0:
-                    candidate = res_json['candidates'][0]
-                    parts = candidate.get('content', {}).get('parts', [])
-                    
+                    parts = res_json['candidates'][0].get('content', {}).get('parts', [])
                     if parts and 'inlineData' in parts[0]:
                         response_audio_bytes = base64.b64decode(parts[0]['inlineData']['data'])
-                        meta_data = candidate.get('audioMetadata', {})
-                        if meta_data:
-                            audio_metadata = base64.b64encode(json.dumps(meta_data).encode()).decode()
             else:
                 return jsonify({"error": f"Google API Error: {res.status_code}"}), res.status_code
 
         if not response_audio_bytes:
             return jsonify({"error": "Falha na geração."}), 500
 
-        # --- PROCESSAMENTO HI-FI (CORREÇÃO TICO E TECO) ---
-        # 1. Carrega usando from_file para detectar automaticamente a amostra original e evitar distorção de velocidade
-        audio_segment = AudioSegment.from_file(io.BytesIO(response_audio_bytes))
-
-        # 2. Converte para as especificações exatas: 44100Hz, Mono, e 24-bit (sample_width=3)
-        audio_segment = audio_segment.set_frame_rate(44100).set_channels(1).set_sample_width(3)
-        
-        # 3. Normalização para manter consistência
+        # --- PROCESSAMENTO DE ÁUDIO ---
+        audio_segment = AudioSegment.from_raw(io.BytesIO(response_audio_bytes), sample_width=2, frame_rate=44100, channels=1)
         audio_segment = effects.normalize(audio_segment, headroom=0.45)
-        
-        # 4. Exportação final em MP3 192k
+
         mp3_buffer = io.BytesIO()
-        audio_segment.export(
-            mp3_buffer, 
-            format="mp3", 
-            bitrate="192k",
-            parameters=["-ar", "44100", "-ac", "1"]
-        )
+        audio_segment.export(mp3_buffer, format="mp3", bitrate="192k")
         
         http_response = make_response(send_file(io.BytesIO(mp3_buffer.getvalue()), mimetype='audio/mpeg'))
         
         # HEADERS DE TELEMETRIA
-        http_response.headers['X-Model-Used'] = model_fullname
+        http_response.headers['X-Model-Used'] = analytics_label
         http_response.headers['X-Prompt-Tokens'] = str(prompt_tokens)
         http_response.headers['X-Output-Tokens'] = str(output_tokens)
-        if audio_metadata:
-            http_response.headers['X-Audio-Metadata'] = audio_metadata
         
         return http_response
 
