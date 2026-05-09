@@ -131,7 +131,7 @@ def generate_audio_endpoint():
             return jsonify({"error": "Falha na geração."}), 500
 
         # --- PROCESSAMENTO DE ÁUDIO ---
-        audio_segment = AudioSegment.from_raw(io.BytesIO(response_audio_bytes), sample_width=2, frame_rate=44100, channels=1)
+        audio_segment = AudioSegment.from_raw(io.BytesIO(response_audio_bytes), sample_width=2, frame_rate=24000, channels=1)
         audio_segment = effects.normalize(audio_segment, headroom=0.45)
 
         mp3_buffer = io.BytesIO()
