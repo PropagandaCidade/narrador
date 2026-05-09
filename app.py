@@ -1,7 +1,7 @@
-# app.py - VERSÃO 29.3 - WORKER ENGINE (HIVE STABLE) - CHIRP & 3.1 SUPPORT
+# app.py - VERSÃO 29.4 - WORKER ENGINE (HIVE STABLE) - CHIRP & 3.1 SUPPORT
 # LOCAL: Repositório Único (N1, N2, N3, N4, N5) no Railway
 # DESCRIÇÃO: Identifica corretamente Chirp e Gemini 3.1 para o Analytics Global.
-# VERSÃO: 29.3 - FIXED: MP3 mono, 44.100 Hz, 192 kbps, base 16-bit, sem alterar pitch/velocidade da voz
+# VERSÃO: 29.4 - FIXED SAFE: MP3 mono, 44.100 Hz, 192 kbps, base 16-bit, sem codec explícito para evitar crash
 
 import os
 import io
@@ -32,7 +32,7 @@ def clean_skill_tags(text):
 @app.route('/')
 def home():
     srv = os.environ.get('RAILWAY_SERVICE_NAME', 'Worker')
-    return f"Serviço v29.3 ({srv}) - Tier 2 Analytics Ready."
+    return f"Serviço v29.4 ({srv}) - Tier 2 Analytics Ready."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -70,9 +70,7 @@ def generate_audio_endpoint():
             
         elif "3.1" in model_nickname:
             if custom_prompt:
-                final_text_for_api = f"Instrução de narração: {custom_prompt}
-
-Texto para narrar: {text_to_narrate}"
+                final_text_for_api = f"Instrução de narração: {custom_prompt}\n\nTexto para narrar: {text_to_narrate}"
             else:
                 final_text_for_api = text_to_narrate
             model_fullname = "gemini-3.1-flash-tts-preview"
@@ -137,32 +135,41 @@ Texto para narrar: {text_to_narrate}"
 
         # --- PROCESSAMENTO DE ÁUDIO ---
         # O áudio bruto da API deve ser lido na taxa original correta.
-        # Usar 44.100 Hz diretamente no from_raw acelera a voz e causa efeito "voz de esquilo".
+        # Não use 44.100 Hz diretamente no from_raw, pois isso acelera a voz e deixa fina.
         audio_segment = AudioSegment.from_raw(
             io.BytesIO(response_audio_bytes),
-            sample_width=2,   # 16-bit PCM na leitura do áudio bruto
+            sample_width=2,   # 16-bit PCM
             frame_rate=24000, # taxa original do áudio bruto retornado pela API
-            channels=1        # mono desde a origem
+            channels=1        # voz mono
         )
 
-        # Garante base interna mono, 16-bit e depois converte a amostragem para 44.100 Hz sem alterar pitch.
+        # Mantém a voz em mono e base 16-bit.
         audio_segment = audio_segment.set_channels(1)
         audio_segment = audio_segment.set_sample_width(2)
+
+        # Normaliza volume sem mexer em velocidade/pitch.
         audio_segment = effects.normalize(audio_segment, headroom=0.45)
+
+        # Converte para 44.100 Hz sem causar efeito "voz de esquilo".
         audio_segment = audio_segment.set_frame_rate(44100)
+
+        # Reforça mono e 16-bit depois da conversão.
         audio_segment = audio_segment.set_channels(1)
         audio_segment = audio_segment.set_sample_width(2)
 
         mp3_buffer = io.BytesIO()
+
+        # Exportação segura:
+        # Remove codec explícito e bitrate duplicado para evitar crash em ambientes Railway/FFmpeg.
+        # O parâmetro -ac 1 força a saída final em mono.
+        # O parâmetro -ar 44100 força a saída final em 44.100 Hz.
         audio_segment.export(
             mp3_buffer,
             format="mp3",
-            codec="libmp3lame",
             bitrate="192k",
             parameters=[
-                "-ac", "1",       # força mono na saída final
-                "-ar", "44100",   # força 44.100 Hz na saída final
-                "-b:a", "192k"    # força 192 kbps na saída final
+                "-ac", "1",
+                "-ar", "44100"
             ]
         )
         mp3_buffer.seek(0)
