@@ -1,7 +1,7 @@
-# app.py - VERSÃO 30.0 - WORKER ENGINE (HIVE STABLE) - SUBTITLES TIMESTAMPS ENABLED
+# app.py - VERSÃO 31.0 - WORKER ENGINE (HI-FI AUDIO FIX)
 # LOCAL: Repositório Único (N1, N2, N3, N4, N5) no Railway
-# DESCRIÇÃO: Agora captura marcas de tempo (timestamps) das palavras para legendas automáticas.
-# VERSÃO: 30.0 - ADDED X-Audio-Metadata FOR SUBTITLES
+# DESCRIÇÃO: Corrigido efeito "tico e teco" usando from_file e resampling adequado.
+# ESPECIFICAÇÕES: Mono, 44.100Hz, 192k, Processamento em 24-bit.
 
 import os
 import io
@@ -21,6 +21,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("HiveWorker")
 
 app = Flask(__name__)
+# Expondo os headers necessários
 CORS(app, expose_headers=['X-Model-Used', 'X-Prompt-Tokens', 'X-Output-Tokens', 'X-Audio-Metadata'])
 
 def clean_skill_tags(text):
@@ -31,7 +32,7 @@ def clean_skill_tags(text):
 @app.route('/')
 def home():
     srv = os.environ.get('RAILWAY_SERVICE_NAME', 'Worker')
-    return f"Serviço v31.0 ({srv}) - Audio 24-bit 192k Engine Online."
+    return f"Serviço v31.0 ({srv}) - Hi-Fi Audio Engine Online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -47,6 +48,7 @@ def generate_audio_endpoint():
         voice_name = str(data.get('voice', 'Kore')).capitalize()
         model_nickname = str(data.get('model_to_use', 'flash')).lower()
         custom_prompt = data.get('custom_prompt', '').strip()
+        origin = data.get('origin_interface', 'dashboard')
         
         try:
             temperature = float(data.get('temperature', 0.85))
@@ -64,15 +66,20 @@ def generate_audio_endpoint():
             final_text_for_api = f"[CONTEXTO: {custom_prompt}] {text_to_narrate}" if custom_prompt else text_to_narrate
             model_fullname = "gemini-2.5-pro-preview-tts" if "pro" in model_nickname else "gemini-2.5-flash-preview-tts"
 
-        # --- CHAMADA API ---
+        logger.info(f"HIVE Hi-Fi Engine: {origin} -> {model_fullname}")
+
+        # --- CHAMADA REST ---
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_fullname}:generateContent?key={api_key}"
+        
         payload = {
             "contents": [{"parts": [{"text": final_text_for_api}]}],
             "generationConfig": {
                 "responseModalities": ["AUDIO"],
                 "speechConfig": {
                     "voiceConfig": {
-                        "prebuiltVoiceConfig": {"voice_name": voice_name}
+                        "prebuiltVoiceConfig": {
+                            "voice_name": voice_name
+                        }
                     }
                 }
             }
@@ -81,7 +88,7 @@ def generate_audio_endpoint():
         response_audio_bytes = None
         prompt_tokens = 0
         output_tokens = 0
-        audio_metadata = ""
+        audio_metadata = "" 
 
         with httpx.Client(timeout=120.0) as client:
             res = client.post(url, json=payload)
@@ -95,6 +102,7 @@ def generate_audio_endpoint():
                 if 'candidates' in res_json and len(res_json['candidates']) > 0:
                     candidate = res_json['candidates'][0]
                     parts = candidate.get('content', {}).get('parts', [])
+                    
                     if parts and 'inlineData' in parts[0]:
                         response_audio_bytes = base64.b64decode(parts[0]['inlineData']['data'])
                         meta_data = candidate.get('audioMetadata', {})
@@ -104,24 +112,19 @@ def generate_audio_endpoint():
                 return jsonify({"error": f"Google API Error: {res.status_code}"}), res.status_code
 
         if not response_audio_bytes:
-            return jsonify({"error": "Falha na geração de áudio."}), 500
+            return jsonify({"error": "Falha na geração."}), 500
 
-        # --- PROCESSAMENTO HI-FI (SOLICITADO) ---
-        # 1. Carrega o áudio original (presumindo PCM 16-bit vindo da API)
-        audio_segment = AudioSegment.from_raw(
-            io.BytesIO(response_audio_bytes), 
-            sample_width=2, 
-            frame_rate=44100, 
-            channels=1
-        )
+        # --- PROCESSAMENTO HI-FI (CORREÇÃO TICO E TECO) ---
+        # 1. Carrega usando from_file para detectar automaticamente a amostra original e evitar distorção de velocidade
+        audio_segment = AudioSegment.from_file(io.BytesIO(response_audio_bytes))
+
+        # 2. Converte para as especificações exatas: 44100Hz, Mono, e 24-bit (sample_width=3)
+        audio_segment = audio_segment.set_frame_rate(44100).set_channels(1).set_sample_width(3)
         
-        # 2. Converte internamente para 24 bits (sample_width=3)
-        audio_segment = audio_segment.set_sample_width(3)
-        
-        # 3. Normalização
+        # 3. Normalização para manter consistência
         audio_segment = effects.normalize(audio_segment, headroom=0.45)
         
-        # 4. Exportação MP3 (192kbps, 44100Hz, Mono)
+        # 4. Exportação final em MP3 192k
         mp3_buffer = io.BytesIO()
         audio_segment.export(
             mp3_buffer, 
@@ -131,6 +134,8 @@ def generate_audio_endpoint():
         )
         
         http_response = make_response(send_file(io.BytesIO(mp3_buffer.getvalue()), mimetype='audio/mpeg'))
+        
+        # HEADERS DE TELEMETRIA
         http_response.headers['X-Model-Used'] = model_fullname
         http_response.headers['X-Prompt-Tokens'] = str(prompt_tokens)
         http_response.headers['X-Output-Tokens'] = str(output_tokens)
