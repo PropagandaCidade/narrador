@@ -1,7 +1,7 @@
-# app.py - VERSÃO 29.1 - WORKER ENGINE (HIVE STABLE) - CHIRP & 3.1 SUPPORT
+# app.py - VERSÃO 29.2 - WORKER ENGINE (HIVE STABLE) - CHIRP & 3.1 SUPPORT
 # LOCAL: Repositório Único (N1, N2, N3, N4, N5) no Railway
 # DESCRIÇÃO: Identifica corretamente Chirp e Gemini 3.1 para o Analytics Global.
-# VERSÃO: 29.1 - FIXED: CHIRP MODEL IDENTIFICATION
+# VERSÃO: 29.2 - FIXED: MP3 export em 44.100 Hz, 192 kbps, sem alterar pitch/velocidade da voz
 
 import os
 import io
@@ -31,7 +31,7 @@ def clean_skill_tags(text):
 @app.route('/')
 def home():
     srv = os.environ.get('RAILWAY_SERVICE_NAME', 'Worker')
-    return f"Serviço v29.1 ({srv}) - Tier 2 Analytics Ready."
+    return f"Serviço v29.2 ({srv}) - Tier 2 Analytics Ready."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -131,11 +131,34 @@ def generate_audio_endpoint():
             return jsonify({"error": "Falha na geração."}), 500
 
         # --- PROCESSAMENTO DE ÁUDIO ---
-        audio_segment = AudioSegment.from_raw(io.BytesIO(response_audio_bytes), sample_width=2, frame_rate=24000, channels=1)
+        # IMPORTANTE:
+        # O áudio bruto da API precisa ser lido primeiro na taxa original correta.
+        # Não coloque frame_rate=44100 diretamente no from_raw, porque isso acelera o áudio
+        # e deixa a voz fina, estilo "voz de esquilo".
+        audio_segment = AudioSegment.from_raw(
+            io.BytesIO(response_audio_bytes),
+            sample_width=2,
+            frame_rate=24000,
+            channels=1
+        )
+
         audio_segment = effects.normalize(audio_segment, headroom=0.45)
 
+        # Agora sim converte para 44.100 Hz sem alterar o pitch/velocidade.
+        audio_segment = audio_segment.set_frame_rate(44100).set_channels(1)
+
         mp3_buffer = io.BytesIO()
-        audio_segment.export(mp3_buffer, format="mp3", bitrate="192k")
+        audio_segment.export(
+            mp3_buffer,
+            format="mp3",
+            bitrate="192k",
+            parameters=[
+                "-ar", "44100",
+                "-ac", "1",
+                "-b:a", "192k"
+            ]
+        )
+        mp3_buffer.seek(0)
         
         http_response = make_response(send_file(io.BytesIO(mp3_buffer.getvalue()), mimetype='audio/mpeg'))
         
