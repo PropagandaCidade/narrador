@@ -21,7 +21,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("HiveWorker")
 
 app = Flask(__name__)
-# Expondo os headers necessários, incluindo o novo header de metadados (legendas)
 CORS(app, expose_headers=['X-Model-Used', 'X-Prompt-Tokens', 'X-Output-Tokens', 'X-Audio-Metadata'])
 
 def clean_skill_tags(text):
@@ -32,7 +31,7 @@ def clean_skill_tags(text):
 @app.route('/')
 def home():
     srv = os.environ.get('RAILWAY_SERVICE_NAME', 'Worker')
-    return f"Serviço v30.0 ({srv}) - Subtitles Engine Online."
+    return f"Serviço v31.0 ({srv}) - Audio 24-bit 192k Engine Online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -48,7 +47,6 @@ def generate_audio_endpoint():
         voice_name = str(data.get('voice', 'Kore')).capitalize()
         model_nickname = str(data.get('model_to_use', 'flash')).lower()
         custom_prompt = data.get('custom_prompt', '').strip()
-        origin = data.get('origin_interface', 'dashboard')
         
         try:
             temperature = float(data.get('temperature', 0.85))
@@ -59,33 +57,22 @@ def generate_audio_endpoint():
             return jsonify({"error": "Texto e voz obrigatórios."}), 400
 
         # --- SELEÇÃO DE MODELO ---
-        if "chirp" in model_nickname:
-            final_text_for_api = f"[ESTILO: CHIRP HD] {text_to_narrate}"
-            model_fullname = "gemini-2.5-flash-preview-tts" 
-            analytics_label = "chirp"
-        elif "3.1" in model_nickname:
+        if "3.1" in model_nickname:
             final_text_for_api = f"Instrução: {custom_prompt}\n\nTexto: {text_to_narrate}" if custom_prompt else text_to_narrate
             model_fullname = "gemini-3.1-flash-tts-preview"
-            analytics_label = model_fullname
         else:
             final_text_for_api = f"[CONTEXTO: {custom_prompt}] {text_to_narrate}" if custom_prompt else text_to_narrate
             model_fullname = "gemini-2.5-pro-preview-tts" if "pro" in model_nickname else "gemini-2.5-flash-preview-tts"
-            analytics_label = model_fullname
 
-        logger.info(f"HIVE Subtitles Engine: {origin} -> {analytics_label}")
-
-        # --- CHAMADA REST COM FOCO EM AUDIO + TIMESTAMPS ---
+        # --- CHAMADA API ---
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_fullname}:generateContent?key={api_key}"
-        
         payload = {
             "contents": [{"parts": [{"text": final_text_for_api}]}],
             "generationConfig": {
                 "responseModalities": ["AUDIO"],
                 "speechConfig": {
                     "voiceConfig": {
-                        "prebuiltVoiceConfig": {
-                            "voice_name": voice_name
-                        }
+                        "prebuiltVoiceConfig": {"voice_name": voice_name}
                     }
                 }
             }
@@ -94,48 +81,57 @@ def generate_audio_endpoint():
         response_audio_bytes = None
         prompt_tokens = 0
         output_tokens = 0
-        audio_metadata = "" # Aqui guardaremos os timestamps em Base64
+        audio_metadata = ""
 
         with httpx.Client(timeout=120.0) as client:
             res = client.post(url, json=payload)
             res_json = res.json()
             
             if res.status_code == 200:
-                # 1. Captura Tokens
                 usage = res_json.get('usageMetadata', {})
                 prompt_tokens = usage.get('promptTokenCount', 0)
                 output_tokens = usage.get('candidatesTokenCount', 0)
 
-                # 2. Captura Áudio e Metadados (Timestamps)
                 if 'candidates' in res_json and len(res_json['candidates']) > 0:
                     candidate = res_json['candidates'][0]
                     parts = candidate.get('content', {}).get('parts', [])
-                    
                     if parts and 'inlineData' in parts[0]:
                         response_audio_bytes = base64.b64decode(parts[0]['inlineData']['data'])
-                        
-                        # Extrai marcas de tempo se disponíveis (JSON stringificado e codificado em Base64 para o header)
-                        # Nota: Em versões Preview, o Gemini retorna audioMetadata com word-level offsets
                         meta_data = candidate.get('audioMetadata', {})
                         if meta_data:
                             audio_metadata = base64.b64encode(json.dumps(meta_data).encode()).decode()
-
             else:
                 return jsonify({"error": f"Google API Error: {res.status_code}"}), res.status_code
 
         if not response_audio_bytes:
-            return jsonify({"error": "Falha na geração."}), 500
+            return jsonify({"error": "Falha na geração de áudio."}), 500
 
-        # --- PROCESSAMENTO HI-FI ---
-        audio_segment = AudioSegment.from_raw(io.BytesIO(response_audio_bytes), sample_width=2, frame_rate=44100, channels=1)
+        # --- PROCESSAMENTO HI-FI (SOLICITADO) ---
+        # 1. Carrega o áudio original (presumindo PCM 16-bit vindo da API)
+        audio_segment = AudioSegment.from_raw(
+            io.BytesIO(response_audio_bytes), 
+            sample_width=2, 
+            frame_rate=44100, 
+            channels=1
+        )
+        
+        # 2. Converte internamente para 24 bits (sample_width=3)
+        audio_segment = audio_segment.set_sample_width(3)
+        
+        # 3. Normalização
         audio_segment = effects.normalize(audio_segment, headroom=0.45)
+        
+        # 4. Exportação MP3 (192kbps, 44100Hz, Mono)
         mp3_buffer = io.BytesIO()
-        audio_segment.export(mp3_buffer, format="mp3", bitrate="192k")
+        audio_segment.export(
+            mp3_buffer, 
+            format="mp3", 
+            bitrate="192k",
+            parameters=["-ar", "44100", "-ac", "1"]
+        )
         
         http_response = make_response(send_file(io.BytesIO(mp3_buffer.getvalue()), mimetype='audio/mpeg'))
-        
-        # HEADERS DE TELEMETRIA E LEGENDAS
-        http_response.headers['X-Model-Used'] = analytics_label
+        http_response.headers['X-Model-Used'] = model_fullname
         http_response.headers['X-Prompt-Tokens'] = str(prompt_tokens)
         http_response.headers['X-Output-Tokens'] = str(output_tokens)
         if audio_metadata:
