@@ -89,10 +89,12 @@ def generate_audio_endpoint():
         # --- CHAMADA REST ---
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_fullname}:generateContent?key={api_key}"
         
+        voice_seed = int(data.get('voice_seed', 0)) or abs(hash(voice_name)) % 100000
         payload = {
             "contents": [{"parts": [{"text": final_text_for_api}]}],
             "generationConfig": {
                 "responseModalities": ["AUDIO"],
+                "seed": voice_seed,
                 "speechConfig": {
                     "voiceConfig": {
                         "prebuiltVoiceConfig": {
