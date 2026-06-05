@@ -56,8 +56,35 @@ def apply_advanced_studio_fx(audio_segment, fx):
             effects_list.append(LowShelfFilter(cutoff_frequency_hz=150, gain_db=2.0))
         elif "u87" in mic or "neumann" in mic:
             effects_list.append(HighShelfFilter(cutoff_frequency_hz=9000, gain_db=4.5))
+        elif "md421" in mic or "sennheiser" in mic:
+            effects_list.append(PeakFilter(cutoff_frequency_hz=4000, gain_db=3.0))
+            effects_list.append(LowShelfFilter(cutoff_frequency_hz=120, gain_db=2.5))
+        elif "re20" in mic or "electrovoice" in mic:
+            effects_list.append(PeakFilter(cutoff_frequency_hz=3000, gain_db=2.0))
+            effects_list.append(LowShelfFilter(cutoff_frequency_hz=80, gain_db=3.5))
+        elif "pr40" in mic or "heil" in mic:
+            effects_list.append(PeakFilter(cutoff_frequency_hz=2000, gain_db=2.5))
+            effects_list.append(LowShelfFilter(cutoff_frequency_hz=100, gain_db=3.0))
+        elif "c414" in mic or "akg" in mic:
+            effects_list.append(HighShelfFilter(cutoff_frequency_hz=10000, gain_db=3.0))
+        elif "c800g" in mic or "sony" in mic:
+            effects_list.append(HighShelfFilter(cutoff_frequency_hz=8000, gain_db=3.5))
+        elif "ela" in mic or "telefunken" in mic:
+            effects_list.append(HighShelfFilter(cutoff_frequency_hz=8000, gain_db=2.0))
+            effects_list.append(LowShelfFilter(cutoff_frequency_hz=200, gain_db=1.5))
         elif "rca" in mic or "44bx" in mic:
             effects_list.append(LowShelfFilter(cutoff_frequency_hz=250, gain_db=5.0))
+        elif "coles" in mic:
+            effects_list.append(LowShelfFilter(cutoff_frequency_hz=200, gain_db=3.0))
+        elif "royer" in mic or "r121" in mic:
+            effects_list.append(HighShelfFilter(cutoff_frequency_hz=6000, gain_db=-2.0))
+        elif "telephone" in mic or "1950" in mic:
+            effects_list.append(PeakFilter(cutoff_frequency_hz=1000, gain_db=6.0, q=3.0))
+        elif "megaphone" in mic:
+            effects_list.append(PeakFilter(cutoff_frequency_hz=1500, gain_db=8.0, q=2.0))
+        elif "am_radio" in mic or "lofi" in mic:
+            effects_list.append(LowShelfFilter(cutoff_frequency_hz=300, gain_db=-6.0))
+            effects_list.append(HighShelfFilter(cutoff_frequency_hz=3000, gain_db=-8.0))
 
         if has_reverb:
             effects_list.append(Reverb(room_size=0.15, wet_level=float(fx.get("room_reverb"))))
