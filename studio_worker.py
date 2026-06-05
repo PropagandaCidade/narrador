@@ -89,6 +89,36 @@ def apply_advanced_studio_fx(audio_segment, fx):
 def home():
     return "Studio Engine v30.11 (Fixed Hierarchy) is online."
 
+@app.route('/api/apply-fx', methods=['POST'])
+def apply_fx_only():
+    """
+    Endpoint FX-only: recebe áudio + config FX, aplica pedalboard, retorna processado.
+    NÃO chama Gemini — seguro para usar com vozes Fish.audio.
+    """
+    try:
+        if 'audio' not in request.files:
+            return jsonify({"error": "Arquivo de áudio não enviado."}), 400
+        if 'fx' not in request.form:
+            return jsonify({"error": "Configuração FX não enviada."}), 400
+
+        audio_file = request.files['audio']
+        fx = json.loads(request.form['fx'])
+
+        seg = AudioSegment.from_file(audio_file.stream)
+        seg = effects.normalize(seg, headroom=2.0)
+        seg = apply_advanced_studio_fx(seg, fx)
+
+        out = io.BytesIO()
+        seg.export(out, format="mp3", bitrate="128k", parameters=["-ar", "44100"])
+
+        res = make_response(send_file(io.BytesIO(out.getvalue()), mimetype='audio/mpeg'))
+        res.headers['X-FX-Engine'] = 'Active'
+        return res
+
+    except Exception as e:
+        logger.error(f"Erro no FX-only endpoint: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_studio():
     try:
