@@ -130,7 +130,9 @@ def generate_audio_endpoint():
                     if parts and 'inlineData' in parts[0]:
                         response_audio_bytes = base64.b64decode(parts[0]['inlineData']['data'])
             else:
-                return jsonify({"error": f"Google API Error: {res.status_code}"}), res.status_code
+                err_msg = res_json.get('error', {}).get('message', f"API Error HTTP {res.status_code}")
+                logger.error(f"Gemini FAIL | model={model_fullname} | voice={voice_name} | text_len={len(text_to_narrate)} | status={res.status_code} | err={err_msg}")
+                return jsonify({"error": err_msg}), res.status_code
 
         if not response_audio_bytes:
             return jsonify({"error": "Falha na geração."}), 500
