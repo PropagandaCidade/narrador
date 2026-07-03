@@ -1,8 +1,3 @@
-# app.py - VERSÃO 29.4 - WORKER ENGINE (HIVE STABLE) - CHIRP & 3.1 SUPPORT
-# LOCAL: Repositório Único (N1, N2, N3, N4, N5) no Railway
-# DESCRIÇÃO: Identifica corretamente Chirp e Gemini 3.1 para o Analytics Global.
-# VERSÃO: 29.4 - FIXED SAFE: MP3 mono, 44.100 Hz, 192 kbps, base 16-bit, sem codec explícito para evitar crash
-
 import os
 import io
 import logging
@@ -11,7 +6,6 @@ import time
 import base64
 import httpx
 import json
-
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
 from pydub import AudioSegment, effects
@@ -50,6 +44,7 @@ def generate_audio_endpoint():
         voice_name = str(data.get('voice', 'Kore')).capitalize()
         model_nickname = str(data.get('model_to_use', 'flash')).lower()
         custom_prompt = data.get('custom_prompt', '').strip()
+        has_prompt = bool(custom_prompt)
         origin = data.get('origin_interface', 'dashboard')
         
         try:
@@ -64,20 +59,72 @@ def generate_audio_endpoint():
         if "chirp" in model_nickname:
             # Se for Chirp, usamos o Flash 2.5 como motor (ou o motor que você configurou para Chirp)
             # Mas a etiqueta X-Model-Used será 'chirp' para o Analytics cobrar US$ 30/1M chars
-            final_text_for_api = f"[ESTILO: CHIRP HD] {text_to_narrate}"
+            final_text_for_api = text_to_narrate
             model_fullname = "gemini-2.5-flash-preview-tts" 
             analytics_label = "chirp"
+            payload = {
+                "contents": [{"parts": [{"text": final_text_for_api}]}],
+                "generationConfig": {
+                    "speechConfig": {
+                        "voiceConfig": {
+                            "prebuiltVoiceConfig": {
+                                "voice_name": voice_name
+                            }
+                        }
+                    }
+                }
+            }
             
         elif "3.1" in model_nickname:
-            if custom_prompt:
-                final_text_for_api = f"Instrução de narração: {custom_prompt}\n\nTexto para narrar: {text_to_narrate}"
-            else:
-                final_text_for_api = text_to_narrate
+            # USO CORRETO: systemInstruction separa a instrução do texto narrado
+            payload = {
+                "systemInstruction": {"parts": [{"text": custom_prompt}]},
+                "contents": [{"parts": [{"text": text_to_narrate}]}],
+                "generationConfig": {
+                    "speechConfig": {
+                        "voiceConfig": {
+                            "prebuiltVoiceConfig": {
+                                "voice_name": voice_name
+                            }
+                        }
+                    }
+                }
+            }
+            final_text_for_api = text_to_narrate
             model_fullname = "gemini-3.1-flash-tts-preview"
             analytics_label = model_fullname
             
         else:
-            final_text_for_api = f"[CONTEXTO: {custom_prompt}] {text_to_narrate}" if custom_prompt else text_to_narrate
+            if has_prompt:
+                # USO CORRETO: systemInstruction gera payload adequado, sem concatenar instrução no texto
+                payload = {
+                    "systemInstruction": {"parts": [{"text": custom_prompt}]},
+                    "contents": [{"parts": [{ "text": text_to_narrate}]}],
+                    "generationConfig": {
+                        "speechConfig": {
+                            "voiceConfig": {
+                                "prebuiltVoiceConfig": {
+                                    "voice_name": voice_name
+                                }
+                            }
+                        }
+                    }
+                }
+                final_text_for_api = text_to_narrate
+            else:
+                final_text_for_api = text_to_narrate
+                payload = {
+                    "contents": [{"parts": [{ "text": final_text_for_api}]}],
+                    "generationConfig": {
+                        "speechConfig": {
+                            "voiceConfig": {
+                                "prebuiltVoiceConfig": {
+                                    "voice_name": voice_name
+                                }
+                            }
+                        }
+                    }
+                }
             if "pro" in model_nickname:
                 model_fullname = "gemini-2.5-pro-preview-tts"
             else:
@@ -89,28 +136,13 @@ def generate_audio_endpoint():
         # --- CHAMADA REST ---
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_fullname}:generateContent?key={api_key}"
         
-        voice_seed = int(data.get('voice_seed', 0)) or abs(hash(voice_name)) % 100000
-        payload = {
-            "contents": [{"parts": [{"text": final_text_for_api}]}],
-            "generationConfig": {
-                "responseModalities": ["AUDIO"],
-                "seed": voice_seed,
-                "speechConfig": {
-                    "voiceConfig": {
-                        "prebuiltVoiceConfig": {
-                            "voice_name": voice_name
-                        }
-                    }
-                }
-            },
-            "safetySettings": [
-                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"}
-            ]
-        }
+        payload["safetySettings"] = [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"}
+        ]
 
         response_audio_bytes = None
         prompt_tokens = 0
