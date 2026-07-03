@@ -57,74 +57,15 @@ def generate_audio_endpoint():
 
         # --- LÓGICA DE SELEÇÃO DE MODELO E IDENTIFICAÇÃO (PARA HEADERS) ---
         if "chirp" in model_nickname:
-            # Se for Chirp, usamos o Flash 2.5 como motor (ou o motor que você configurou para Chirp)
-            # Mas a etiqueta X-Model-Used será 'chirp' para o Analytics cobrar US$ 30/1M chars
             final_text_for_api = text_to_narrate
             model_fullname = "gemini-2.5-flash-preview-tts" 
             analytics_label = "chirp"
-            payload = {
-                "contents": [{"parts": [{"text": final_text_for_api}]}],
-                "generationConfig": {
-                    "speechConfig": {
-                        "voiceConfig": {
-                            "prebuiltVoiceConfig": {
-                                "voice_name": voice_name
-                            }
-                        }
-                    }
-                }
-            }
             
         elif "3.1" in model_nickname:
-            # USO CORRETO: systemInstruction separa a instrução do texto narrado
-            payload = {
-                "systemInstruction": {"parts": [{"text": custom_prompt}]},
-                "contents": [{"parts": [{"text": text_to_narrate}]}],
-                "generationConfig": {
-                    "speechConfig": {
-                        "voiceConfig": {
-                            "prebuiltVoiceConfig": {
-                                "voice_name": voice_name
-                            }
-                        }
-                    }
-                }
-            }
-            final_text_for_api = text_to_narrate
             model_fullname = "gemini-3.1-flash-tts-preview"
             analytics_label = model_fullname
             
         else:
-            if has_prompt:
-                # USO CORRETO: systemInstruction gera payload adequado, sem concatenar instrução no texto
-                payload = {
-                    "systemInstruction": {"parts": [{"text": custom_prompt}]},
-                    "contents": [{"parts": [{ "text": text_to_narrate}]}],
-                    "generationConfig": {
-                        "speechConfig": {
-                            "voiceConfig": {
-                                "prebuiltVoiceConfig": {
-                                    "voice_name": voice_name
-                                }
-                            }
-                        }
-                    }
-                }
-                final_text_for_api = text_to_narrate
-            else:
-                final_text_for_api = text_to_narrate
-                payload = {
-                    "contents": [{"parts": [{ "text": final_text_for_api}]}],
-                    "generationConfig": {
-                        "speechConfig": {
-                            "voiceConfig": {
-                                "prebuiltVoiceConfig": {
-                                    "voice_name": voice_name
-                                }
-                            }
-                        }
-                    }
-                }
             if "pro" in model_nickname:
                 model_fullname = "gemini-2.5-pro-preview-tts"
             else:
@@ -136,13 +77,32 @@ def generate_audio_endpoint():
         # --- CHAMADA REST ---
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_fullname}:generateContent?key={api_key}"
         
-        payload["safetySettings"] = [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"}
-        ]
+        # Monta payload base com text_to_narrate
+        payload = {
+            "contents": [{"parts": [{"text": text_to_narrate}]}],
+            "generationConfig": {
+                "responseModalities": ["AUDIO"],
+                "temperature": temperature,
+                "speechConfig": {
+                    "voiceConfig": {
+                        "prebuiltVoiceConfig": {
+                            "voice_name": voice_name
+                        }
+                    }
+                }
+            },
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"}
+            ]
+        }
+        
+        # Adiciona systemInstruction APENAS se custom_prompt existir (não vazio)
+        if has_prompt:
+            payload["systemInstruction"] = {"parts": [{"text": custom_prompt}]}
 
         response_audio_bytes = None
         prompt_tokens = 0
@@ -170,49 +130,31 @@ def generate_audio_endpoint():
             return jsonify({"error": "Falha na geração."}), 500
 
         # --- PROCESSAMENTO DE ÁUDIO ---
-        # O áudio bruto da API deve ser lido na taxa original correta.
-        # Não use 44.100 Hz diretamente no from_raw, pois isso acelera a voz e deixa fina.
         audio_segment = AudioSegment.from_raw(
             io.BytesIO(response_audio_bytes),
-            sample_width=2,   # 16-bit PCM
-            frame_rate=24000, # taxa original do áudio bruto retornado pela API
-            channels=1        # voz mono
+            sample_width=2,
+            frame_rate=24000,
+            channels=1
         )
 
-        # Mantém a voz em mono e base 16-bit.
         audio_segment = audio_segment.set_channels(1)
         audio_segment = audio_segment.set_sample_width(2)
-
-        # Normaliza volume sem mexer em velocidade/pitch.
         audio_segment = effects.normalize(audio_segment, headroom=0.45)
-
-        # Converte para 44.100 Hz sem causar efeito "voz de esquilo".
         audio_segment = audio_segment.set_frame_rate(44100)
-
-        # Reforça mono e 16-bit depois da conversão.
         audio_segment = audio_segment.set_channels(1)
         audio_segment = audio_segment.set_sample_width(2)
 
         mp3_buffer = io.BytesIO()
-
-        # Exportação segura:
-        # Remove codec explícito e bitrate duplicado para evitar crash em ambientes Railway/FFmpeg.
-        # O parâmetro -ac 1 força a saída final em mono.
-        # O parâmetro -ar 44100 força a saída final em 44.100 Hz.
         audio_segment.export(
             mp3_buffer,
             format="mp3",
             bitrate="192k",
-            parameters=[
-                "-ac", "1",
-                "-ar", "44100"
-            ]
+            parameters=["-ac", "1", "-ar", "44100"]
         )
         mp3_buffer.seek(0)
         
         http_response = make_response(send_file(io.BytesIO(mp3_buffer.getvalue()), mimetype='audio/mpeg'))
         
-        # HEADERS DE TELEMETRIA
         http_response.headers['X-Model-Used'] = analytics_label
         http_response.headers['X-Prompt-Tokens'] = str(prompt_tokens)
         http_response.headers['X-Output-Tokens'] = str(output_tokens)
