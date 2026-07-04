@@ -23,6 +23,21 @@ def clean_skill_tags(text):
     cleaned = re.sub(r'</?context_guard>', '', text)
     return cleaned.strip()
 
+PRONUNCIATION_MAP = {
+    "IDE": "Importante: ignore a palavra IDEIA. A marca IDE se pronuncia IDE, com E aberto e tonica no I. Nunca leia como IDEIA.",
+}
+
+def _apply_pronunciation_guide(text):
+    words_to_check = set()
+    for word in PRONUNCIATION_MAP:
+        pattern = re.compile(r'\b' + re.escape(word) + r'\b', re.IGNORECASE)
+        if pattern.search(text):
+            words_to_check.add(word)
+    if not words_to_check:
+        return text
+    instructions = " ".join(PRONUNCIATION_MAP[w] for w in words_to_check)
+    return f"{instructions} {text}"
+
 @app.route('/')
 def home():
     srv = os.environ.get('RAILWAY_SERVICE_NAME', 'Worker')
@@ -46,6 +61,7 @@ def generate_audio_endpoint():
         custom_prompt = data.get('custom_prompt', '').strip()
         has_prompt = bool(custom_prompt)
         origin = data.get('origin_interface', 'dashboard')
+        use_phonetic = data.get('phonetic', True)
         
         try:
             temperature = float(data.get('temperature', 0.85))
@@ -54,6 +70,12 @@ def generate_audio_endpoint():
 
         if not text_to_narrate or not voice_name:
             return jsonify({"error": "Texto e voz obrigatórios."}), 400
+
+        if use_phonetic:
+            text_to_narrate = _apply_pronunciation_guide(text_to_narrate)
+
+        if has_prompt:
+            text_to_narrate = f"{custom_prompt} {text_to_narrate}"
 
         # --- LÓGICA DE SELEÇÃO DE MODELO E IDENTIFICAÇÃO (PARA HEADERS) ---
         if "chirp" in model_nickname:
@@ -100,10 +122,6 @@ def generate_audio_endpoint():
             ]
         }
         
-        # Adiciona systemInstruction APENAS se custom_prompt existir (não vazio)
-        if has_prompt:
-            payload["systemInstruction"] = {"parts": [{"text": custom_prompt}]}
-
         response_audio_bytes = None
         prompt_tokens = 0
         output_tokens = 0
