@@ -2,28 +2,46 @@ import os
 import io
 import logging
 import re
+import time
 import base64
 import httpx
+import json
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
 from pydub import AudioSegment, effects
 
-# Configuração de Logs
+# 1. CONFIGURAÇÃO DE LOGS
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("HiveWorker")
 
 app = Flask(__name__)
 CORS(app, expose_headers=['X-Model-Used', 'X-Prompt-Tokens', 'X-Output-Tokens'])
 
-# Regra de pronúncia para a marca IDE
-PRONUNCIATION_RULES = "Instrução de pronúncia: Sempre que encontrar a marca 'IDE', pronuncie exatamente como 'Ídê' (I aberto, Dê fechado). Nunca pronuncie como 'ideia'."
-
 def clean_skill_tags(text):
-    return re.sub(r'</?context_guard>', '', text).strip() if text else ""
+    if not text:
+        return ""
+    cleaned = re.sub(r'</?context_guard>', '', text)
+    return cleaned.strip()
+
+PRONUNCIATION_MAP = {
+    "IDE": "Importante: ignore a palavra IDEIA. A marca IDE se pronuncia IDE, com E aberto e tonica no I. Nunca leia como IDEIA.",
+}
+
+def _apply_pronunciation_guide(text):
+    words_to_check = set()
+    for word in PRONUNCIATION_MAP:
+        pattern = re.compile(r'\b' + re.escape(word) + r'\b', re.IGNORECASE)
+        if pattern.search(text):
+            words_to_check.add(word)
+    if not words_to_check:
+        return text
+    instructions = " ".join(PRONUNCIATION_MAP[w] for w in words_to_check)
+    return f"{instructions} {text}"
 
 @app.route('/')
 def home():
-    return "HiveWorker v29.4 - Audio Engine Online."
+    srv = os.environ.get('RAILWAY_SERVICE_NAME', 'Worker')
+    return f"Serviço v29.4 ({srv}) - Tier 2 Analytics Ready."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -33,37 +51,66 @@ def generate_audio_endpoint():
             return jsonify({"error": "Dados inválidos."}), 400
 
         api_key = data.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
-        text_to_narrate = clean_skill_tags(data.get('text', ''))
+        if not api_key:
+            return jsonify({"error": "Chave Gemini ausente."}), 500
+
+        text_raw = data.get('text', '')
+        text_to_narrate = clean_skill_tags(text_raw)
         voice_name = str(data.get('voice', 'Kore')).capitalize()
         model_nickname = str(data.get('model_to_use', 'flash')).lower()
         custom_prompt = data.get('custom_prompt', '').strip()
+        has_prompt = bool(custom_prompt)
+        origin = data.get('origin_interface', 'dashboard')
         use_phonetic = data.get('phonetic', True)
         
-        if not text_to_narrate:
-            return jsonify({"error": "Texto obrigatório."}), 400
+        try:
+            temperature = float(data.get('temperature', 0.85))
+        except:
+            temperature = 0.85
 
-        # Seleção de Modelo
-        if "3.1" in model_nickname:
-            model_fullname = "gemini-3.1-flash-tts-preview"
-        elif "pro" in model_nickname:
-            model_fullname = "gemini-2.5-pro-preview-tts"
-        else:
-            model_fullname = "gemini-2.5-flash-preview-tts"
+        if not text_to_narrate or not voice_name:
+            return jsonify({"error": "Texto e voz obrigatórios."}), 400
 
-        # Montagem do System Instruction (Isolado do texto principal)
-        system_instructions = []
         if use_phonetic:
-            system_instructions.append(PRONUNCIATION_RULES)
-        if custom_prompt:
-            system_instructions.append(custom_prompt)
+            text_to_narrate = _apply_pronunciation_guide(text_to_narrate)
+
+        if has_prompt:
+            text_to_narrate = f"{custom_prompt} {text_to_narrate}"
+
+        # --- LÓGICA DE SELEÇÃO DE MODELO E IDENTIFICAÇÃO (PARA HEADERS) ---
+        if "chirp" in model_nickname:
+            final_text_for_api = text_to_narrate
+            model_fullname = "gemini-2.5-flash-preview-tts" 
+            analytics_label = "chirp"
+            
+        elif "3.1" in model_nickname:
+            model_fullname = "gemini-3.1-flash-tts-preview"
+            analytics_label = model_fullname
+            
+        else:
+            if "pro" in model_nickname:
+                model_fullname = "gemini-2.5-pro-preview-tts"
+            else:
+                model_fullname = "gemini-2.5-flash-preview-tts"
+            analytics_label = model_fullname
+
+        logger.info(f"HIVE Worker: {origin} -> {analytics_label}")
+
+        # --- CHAMADA REST ---
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_fullname}:generateContent?key={api_key}"
         
-        # Estrutura JSON rigorosa para a API do Gemini
+        # Monta payload base com text_to_narrate
         payload = {
             "contents": [{"parts": [{"text": text_to_narrate}]}],
             "generationConfig": {
                 "responseModalities": ["AUDIO"],
+                "temperature": temperature,
                 "speechConfig": {
-                    "voiceConfig": {"prebuiltVoiceConfig": {"voice_name": voice_name}}
+                    "voiceConfig": {
+                        "prebuiltVoiceConfig": {
+                            "voice_name": voice_name
+                        }
+                    }
                 }
             },
             "safetySettings": [
@@ -74,50 +121,66 @@ def generate_audio_endpoint():
                 {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"}
             ]
         }
+        
+        response_audio_bytes = None
+        prompt_tokens = 0
+        output_tokens = 0
 
-        # Adiciona o campo systemInstruction APENAS se houver conteúdo para ele
-        if system_instructions:
-            payload["systemInstruction"] = {"parts": [{"text": "\n".join(system_instructions)}]}
-
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_fullname}:generateContent?key={api_key}"
-
-        with httpx.Client(timeout=150.0) as client:
+        with httpx.Client(timeout=120.0) as client:
             res = client.post(url, json=payload)
-            
-            # Se a API retornar erro, logamos o res.text para saber o motivo exato
-            if res.status_code != 200:
-                logger.error(f"Erro API Google: {res.text}")
-                return jsonify({"error": "Erro na API", "details": res.text}), res.status_code
-            
             res_json = res.json()
             
-            # Extração segura dos dados
-            try:
-                candidate = res_json.get('candidates', [{}])[0]
-                parts = candidate.get('content', {}).get('parts', [])
-                audio_data = parts[0].get('inlineData', {}).get('data')
-                if not audio_data:
-                    return jsonify({"error": "Nenhum áudio retornado"}), 500
-                response_audio_bytes = base64.b64decode(audio_data)
-            except Exception as e:
-                return jsonify({"error": "Falha ao processar resposta do Google"}), 500
+            if res.status_code == 200:
+                usage = res_json.get('usageMetadata', {})
+                prompt_tokens = usage.get('promptTokenCount', 0)
+                output_tokens = usage.get('candidatesTokenCount', 0)
 
-        # Processamento de áudio (Pydub)
+                if 'candidates' in res_json and len(res_json['candidates']) > 0:
+                    parts = res_json['candidates'][0].get('content', {}).get('parts', [])
+                    if parts and 'inlineData' in parts[0]:
+                        response_audio_bytes = base64.b64decode(parts[0]['inlineData']['data'])
+            else:
+                err_msg = res_json.get('error', {}).get('message', f"API Error HTTP {res.status_code}")
+                logger.error(f"Gemini FAIL | model={model_fullname} | voice={voice_name} | text_len={len(text_to_narrate)} | status={res.status_code} | err={err_msg}")
+                return jsonify({"error": err_msg}), res.status_code
+
+        if not response_audio_bytes:
+            return jsonify({"error": "Falha na geração."}), 500
+
+        # --- PROCESSAMENTO DE ÁUDIO ---
         audio_segment = AudioSegment.from_raw(
-            io.BytesIO(response_audio_bytes), sample_width=2, frame_rate=24000, channels=1
+            io.BytesIO(response_audio_bytes),
+            sample_width=2,
+            frame_rate=24000,
+            channels=1
         )
-        audio_segment = effects.normalize(audio_segment, headroom=0.45).set_frame_rate(44100)
-        
+
+        audio_segment = audio_segment.set_channels(1)
+        audio_segment = audio_segment.set_sample_width(2)
+        audio_segment = effects.normalize(audio_segment, headroom=0.45)
+        audio_segment = audio_segment.set_frame_rate(44100)
+        audio_segment = audio_segment.set_channels(1)
+        audio_segment = audio_segment.set_sample_width(2)
+
         mp3_buffer = io.BytesIO()
-        audio_segment.export(mp3_buffer, format="mp3", bitrate="192k", parameters=["-ac", "1", "-ar", "44100"])
+        audio_segment.export(
+            mp3_buffer,
+            format="mp3",
+            bitrate="192k",
+            parameters=["-ac", "1", "-ar", "44100"]
+        )
         mp3_buffer.seek(0)
         
-        response = make_response(send_file(mp3_buffer, mimetype='audio/mpeg'))
-        response.headers['X-Model-Used'] = model_fullname
-        return response
+        http_response = make_response(send_file(io.BytesIO(mp3_buffer.getvalue()), mimetype='audio/mpeg'))
+        
+        http_response.headers['X-Model-Used'] = analytics_label
+        http_response.headers['X-Prompt-Tokens'] = str(prompt_tokens)
+        http_response.headers['X-Output-Tokens'] = str(output_tokens)
+        
+        return http_response
 
     except Exception as e:
-        logger.error(f"Erro Crítico no HiveWorker: {str(e)}")
+        logger.error(f"Erro: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
