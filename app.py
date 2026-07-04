@@ -15,15 +15,15 @@ logger = logging.getLogger("HiveWorker")
 app = Flask(__name__)
 CORS(app, expose_headers=['X-Model-Used', 'X-Prompt-Tokens', 'X-Output-Tokens'])
 
-# Regra de Pronúncia Centralizada
-PRONUNCIATION_RULES = "Sempre que encontrar a marca 'IDE', pronuncie exatamente como 'Ídê' (I aberto, Dê fechado). Nunca pronuncie como 'ideia'."
+# Regra de pronúncia para a marca IDE
+PRONUNCIATION_RULES = "Instrução de pronúncia: Sempre que encontrar a marca 'IDE', pronuncie exatamente como 'Ídê' (I aberto, Dê fechado). Nunca pronuncie como 'ideia'."
 
 def clean_skill_tags(text):
     return re.sub(r'</?context_guard>', '', text).strip() if text else ""
 
 @app.route('/')
 def home():
-    return f"Serviço v29.4 (Corrigido) - Ready."
+    return "HiveWorker v29.4 - Audio Engine Online."
 
 @app.route('/api/generate-audio', methods=['POST'])
 def generate_audio_endpoint():
@@ -50,14 +50,14 @@ def generate_audio_endpoint():
         else:
             model_fullname = "gemini-2.5-flash-preview-tts"
 
-        # Montagem do System Instruction (Onde as regras de leitura devem ficar)
+        # Montagem do System Instruction (Isolado do texto principal)
         system_instructions = []
         if use_phonetic:
             system_instructions.append(PRONUNCIATION_RULES)
         if custom_prompt:
             system_instructions.append(custom_prompt)
         
-        # Payload Estrito conforme documentação Google v1beta
+        # Estrutura JSON rigorosa para a API do Gemini
         payload = {
             "contents": [{"parts": [{"text": text_to_narrate}]}],
             "generationConfig": {
@@ -75,29 +75,34 @@ def generate_audio_endpoint():
             ]
         }
 
-        # Adiciona systemInstruction apenas se necessário
+        # Adiciona o campo systemInstruction APENAS se houver conteúdo para ele
         if system_instructions:
             payload["systemInstruction"] = {"parts": [{"text": "\n".join(system_instructions)}]}
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_fullname}:generateContent?key={api_key}"
 
-        with httpx.Client(timeout=120.0) as client:
+        with httpx.Client(timeout=150.0) as client:
             res = client.post(url, json=payload)
+            
+            # Se a API retornar erro, logamos o res.text para saber o motivo exato
+            if res.status_code != 200:
+                logger.error(f"Erro API Google: {res.text}")
+                return jsonify({"error": "Erro na API", "details": res.text}), res.status_code
+            
             res_json = res.json()
             
-            if res.status_code != 200:
-                logger.error(f"Erro API: {res.text}")
-                return jsonify({"error": "Falha na geração", "details": res.text}), res.status_code
+            # Extração segura dos dados
+            try:
+                candidate = res_json.get('candidates', [{}])[0]
+                parts = candidate.get('content', {}).get('parts', [])
+                audio_data = parts[0].get('inlineData', {}).get('data')
+                if not audio_data:
+                    return jsonify({"error": "Nenhum áudio retornado"}), 500
+                response_audio_bytes = base64.b64decode(audio_data)
+            except Exception as e:
+                return jsonify({"error": "Falha ao processar resposta do Google"}), 500
 
-            # Extração segura
-            candidate = res_json.get('candidates', [{}])[0]
-            parts = candidate.get('content', {}).get('parts', [])
-            if not parts or 'inlineData' not in parts[0]:
-                return jsonify({"error": "Áudio não retornado pela API"}), 500
-            
-            response_audio_bytes = base64.b64decode(parts[0]['inlineData']['data'])
-
-        # Processamento de Áudio
+        # Processamento de áudio (Pydub)
         audio_segment = AudioSegment.from_raw(
             io.BytesIO(response_audio_bytes), sample_width=2, frame_rate=24000, channels=1
         )
@@ -112,8 +117,9 @@ def generate_audio_endpoint():
         return response
 
     except Exception as e:
-        logger.error(f"Erro Crítico: {str(e)}")
+        logger.error(f"Erro Crítico no HiveWorker: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
