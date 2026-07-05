@@ -50,9 +50,15 @@ def generate_audio_endpoint():
         if not data:
             return jsonify({"error": "Dados inválidos."}), 400
 
-        api_key = data.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
+        api_key = (
+            data.get("GEMINI_API_KEY")
+            or os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("GOOGLE_GENERATIVE_AI_API_KEY")
+            or os.environ.get("GOOGLE_API_KEY")
+            or os.environ.get("GEMINI_KEY")
+        )
         if not api_key:
-            return jsonify({"error": "Chave Gemini ausente."}), 500
+            return jsonify({"error": "Chave Gemini ausente. Configure GEMINI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY, GOOGLE_API_KEY ou GEMINI_KEY no Railway."}), 500
 
         text_raw = data.get('text', '')
         text_to_narrate = clean_skill_tags(text_raw)
