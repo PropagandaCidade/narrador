@@ -161,10 +161,14 @@ def generate_audio_studio():
         # --- MODEL MAPPING ---
         if "3.1" in model_nickname:
             model_fullname = "gemini-3.1-flash-tts-preview"
-            final_prompt = f"Instrução de narração (não leia esta linha em voz alta):\n{prompt}\n\nAgora narre APENAS o texto abaixo, sem incluir instruções ou metadados:\n\n{text}" if prompt else text
         else:
             model_fullname = "gemini-2.5-pro-preview-tts" if "pro" in model_nickname else "gemini-2.5-flash-preview-tts"
-            final_prompt = f"Importante: siga estas instruções de locução sem lê-las em voz alta:\n{prompt}\n\nAgora narre APENAS o texto abaixo:\n\n{text}" if prompt else text
+
+        # Instrução inline curta (systemInstruction NÃO funciona em TTS)
+        if prompt:
+            final_prompt = f"Instrução de locução (não leia em voz alta):\n{prompt}\n\nTexto para narrar:\n{text}"
+        else:
+            final_prompt = text
 
         logger.info(f"Studio Engine: {origin} -> {model_fullname} (Full Schema Fix)")
 

@@ -68,8 +68,14 @@ def generate_audio_endpoint():
 
         logger.info(f"HIVE Worker: {origin} -> {analytics_label}")
 
-        # --- MONTA PAYLOAD ÚNICO (systemInstruction SEPARADO do texto) ---
-        base_payload = {
+        # --- MONTA PAYLOAD: instrução inline curta (systemInstruction NÃO funciona em TTS — HTTP 500) ---
+        if has_prompt:
+            final_text = f"Instrução de locução (não leia em voz alta):\n{custom_prompt}\n\nTexto para narrar:\n{text_to_narrate}"
+        else:
+            final_text = text_to_narrate
+
+        payload = {
+            "contents": [{"parts": [{"text": final_text}]}],
             "generationConfig": {
                 "responseModalities": ["AUDIO"],
                 "speechConfig": {
@@ -88,18 +94,6 @@ def generate_audio_endpoint():
                 {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"}
             ]
         }
-
-        if has_prompt:
-            payload = {
-                **base_payload,
-                "systemInstruction": {"parts": [{"text": custom_prompt}]},
-                "contents": [{"parts": [{"text": text_to_narrate}]}]
-            }
-        else:
-            payload = {
-                **base_payload,
-                "contents": [{"parts": [{"text": text_to_narrate}]}]
-            }
 
         # --- CHAMADA REST ---
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_fullname}:generateContent?key={api_key}"
