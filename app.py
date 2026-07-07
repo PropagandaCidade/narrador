@@ -23,21 +23,6 @@ def clean_skill_tags(text):
     cleaned = re.sub(r'</?context_guard>', '', text)
     return cleaned.strip()
 
-PRONUNCIATION_MAP = {
-    "IDE": "Importante: ignore a palavra IDEIA. A marca IDE se pronuncia IDE, com E aberto e tonica no I. Nunca leia como IDEIA.",
-}
-
-def _apply_pronunciation_guide(text):
-    words_to_check = set()
-    for word in PRONUNCIATION_MAP:
-        pattern = re.compile(r'\b' + re.escape(word) + r'\b', re.IGNORECASE)
-        if pattern.search(text):
-            words_to_check.add(word)
-    if not words_to_check:
-        return text
-    instructions = " ".join(PRONUNCIATION_MAP[w] for w in words_to_check)
-    return f"{instructions} {text}"
-
 @app.route('/')
 def home():
     srv = os.environ.get('RAILWAY_SERVICE_NAME', 'Worker')
@@ -50,15 +35,9 @@ def generate_audio_endpoint():
         if not data:
             return jsonify({"error": "Dados inválidos."}), 400
 
-        api_key = (
-            data.get("GEMINI_API_KEY")
-            or os.environ.get("GEMINI_API_KEY")
-            or os.environ.get("GOOGLE_GENERATIVE_AI_API_KEY")
-            or os.environ.get("GOOGLE_API_KEY")
-            or os.environ.get("GEMINI_KEY")
-        )
+        api_key = data.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
         if not api_key:
-            return jsonify({"error": "Chave Gemini ausente. Configure GEMINI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY, GOOGLE_API_KEY ou GEMINI_KEY no Railway."}), 500
+            return jsonify({"error": "Chave Gemini ausente."}), 500
 
         text_raw = data.get('text', '')
         text_to_narrate = clean_skill_tags(text_raw)
@@ -67,7 +46,6 @@ def generate_audio_endpoint():
         custom_prompt = data.get('custom_prompt', '').strip()
         has_prompt = bool(custom_prompt)
         origin = data.get('origin_interface', 'dashboard')
-        use_phonetic = data.get('phonetic', True)
         
         try:
             temperature = float(data.get('temperature', 0.85))
@@ -77,40 +55,23 @@ def generate_audio_endpoint():
         if not text_to_narrate or not voice_name:
             return jsonify({"error": "Texto e voz obrigatórios."}), 400
 
-        if use_phonetic:
-            text_to_narrate = _apply_pronunciation_guide(text_to_narrate)
-
-        if has_prompt:
-            text_to_narrate = f"{custom_prompt} {text_to_narrate}"
-
-        # --- LÓGICA DE SELEÇÃO DE MODELO E IDENTIFICAÇÃO (PARA HEADERS) ---
+        # --- LÓGICA DE SELEÇÃO DE MODELO ---
         if "chirp" in model_nickname:
-            final_text_for_api = text_to_narrate
             model_fullname = "gemini-2.5-flash-preview-tts" 
             analytics_label = "chirp"
-            
         elif "3.1" in model_nickname:
             model_fullname = "gemini-3.1-flash-tts-preview"
             analytics_label = model_fullname
-            
         else:
-            if "pro" in model_nickname:
-                model_fullname = "gemini-2.5-pro-preview-tts"
-            else:
-                model_fullname = "gemini-2.5-flash-preview-tts"
+            model_fullname = "gemini-2.5-pro-preview-tts" if "pro" in model_nickname else "gemini-2.5-flash-preview-tts"
             analytics_label = model_fullname
 
         logger.info(f"HIVE Worker: {origin} -> {analytics_label}")
 
-        # --- CHAMADA REST ---
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_fullname}:generateContent?key={api_key}"
-        
-        # Monta payload base com text_to_narrate
-        payload = {
-            "contents": [{"parts": [{"text": text_to_narrate}]}],
+        # --- MONTA PAYLOAD ÚNICO (systemInstruction SEPARADO do texto) ---
+        base_payload = {
             "generationConfig": {
                 "responseModalities": ["AUDIO"],
-                "temperature": temperature,
                 "speechConfig": {
                     "voiceConfig": {
                         "prebuiltVoiceConfig": {
@@ -127,14 +88,34 @@ def generate_audio_endpoint():
                 {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"}
             ]
         }
-        
+
+        if has_prompt:
+            payload = {
+                **base_payload,
+                "systemInstruction": {"parts": [{"text": custom_prompt}]},
+                "contents": [{"parts": [{"text": text_to_narrate}]}]
+            }
+        else:
+            payload = {
+                **base_payload,
+                "contents": [{"parts": [{"text": text_to_narrate}]}]
+            }
+
+        # --- CHAMADA REST ---
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_fullname}:generateContent?key={api_key}"
+
         response_audio_bytes = None
         prompt_tokens = 0
         output_tokens = 0
 
         with httpx.Client(timeout=120.0) as client:
-            res = client.post(url, json=payload)
-            res_json = res.json()
+            if "3.1" not in model_nickname:
+                res = client.post(url, json=payload)
+                res_json = res.json()
+            else:
+                # Para 3.1, se já criamos o payload completo acima, não recriamos
+                res = client.post(url, json=payload)
+                res_json = res.json()
             
             if res.status_code == 200:
                 usage = res_json.get('usageMetadata', {})
@@ -146,39 +127,55 @@ def generate_audio_endpoint():
                     if parts and 'inlineData' in parts[0]:
                         response_audio_bytes = base64.b64decode(parts[0]['inlineData']['data'])
             else:
-                err_msg = res_json.get('error', {}).get('message', f"API Error HTTP {res.status_code}")
-                logger.error(f"Gemini FAIL | model={model_fullname} | voice={voice_name} | text_len={len(text_to_narrate)} | status={res.status_code} | err={err_msg}")
-                return jsonify({"error": err_msg}), res.status_code
+                return jsonify({"error": f"Google API Error: {res.status_code}"}), res.status_code
 
         if not response_audio_bytes:
             return jsonify({"error": "Falha na geração."}), 500
 
         # --- PROCESSAMENTO DE ÁUDIO ---
+        # O áudio bruto da API deve ser lido na taxa original correta.
+        # Não use 44.100 Hz diretamente no from_raw, pois isso acelera a voz e deixa fina.
         audio_segment = AudioSegment.from_raw(
             io.BytesIO(response_audio_bytes),
-            sample_width=2,
-            frame_rate=24000,
-            channels=1
+            sample_width=2,   # 16-bit PCM
+            frame_rate=24000, # taxa original do áudio bruto retornado pela API
+            channels=1        # voz mono
         )
 
+        # Mantém a voz em mono e base 16-bit.
         audio_segment = audio_segment.set_channels(1)
         audio_segment = audio_segment.set_sample_width(2)
+
+        # Normaliza volume sem mexer em velocidade/pitch.
         audio_segment = effects.normalize(audio_segment, headroom=0.45)
+
+        # Converte para 44.100 Hz sem causar efeito "voz de esquilo".
         audio_segment = audio_segment.set_frame_rate(44100)
+
+        # Reforça mono e 16-bit depois da conversão.
         audio_segment = audio_segment.set_channels(1)
         audio_segment = audio_segment.set_sample_width(2)
 
         mp3_buffer = io.BytesIO()
+
+        # Exportação segura:
+        # Remove codec explícito e bitrate duplicado para evitar crash em ambientes Railway/FFmpeg.
+        # O parâmetro -ac 1 força a saída final em mono.
+        # O parâmetro -ar 44100 força a saída final em 44.100 Hz.
         audio_segment.export(
             mp3_buffer,
             format="mp3",
             bitrate="192k",
-            parameters=["-ac", "1", "-ar", "44100"]
+            parameters=[
+                "-ac", "1",
+                "-ar", "44100"
+            ]
         )
         mp3_buffer.seek(0)
         
         http_response = make_response(send_file(io.BytesIO(mp3_buffer.getvalue()), mimetype='audio/mpeg'))
         
+        # HEADERS DE TELEMETRIA
         http_response.headers['X-Model-Used'] = analytics_label
         http_response.headers['X-Prompt-Tokens'] = str(prompt_tokens)
         http_response.headers['X-Output-Tokens'] = str(output_tokens)
