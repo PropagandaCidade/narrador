@@ -100,7 +100,7 @@ def apply_advanced_studio_fx(audio_segment, fx):
         if has_warmth:
             effects_list.append(Gain(gain_db=float(fx.get("analog_warmth")) * 6.0))
         
-        effects_list.append(Limiter(threshold_db=-0.5))
+        effects_list.append(Limiter(threshold_db=-3.0))
 
         board = Pedalboard(effects_list)
         processed = board(samples, sr)
